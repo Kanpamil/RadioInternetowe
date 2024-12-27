@@ -80,11 +80,6 @@ int main() {
 
     std::cout << "Połączono z klientem.\n";
 
-    // Wysłanie metadanych
-    send_metadata(client_socket, "../mp3files/test.mp3;128kbps;MP3");
-
-    // Strumieniowanie pliku audio
-    stream_audio(client_socket, "radio.mp3");
 
     close(client_socket);
     close(server_fd);
