@@ -1,54 +1,40 @@
 import socket
-import pygame
+from pydub import AudioSegment
+from pydub.playback import play
 import io
 
-SERVER_IP = "127.0.0.1"
-SERVER_PORT = 8080
-BUFFER_SIZE = 4096
+SERVER_HOST = 'localhost'
+SERVER_PORT = 1100
+CHUNK_SIZE = 4096
 
-def stream_audio():
-    pygame.mixer.init()
-    audio_data = io.BytesIO()
+def play_streamed_mp3():
+    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    client_socket.connect((SERVER_HOST, SERVER_PORT))
 
+    audio_buffer = io.BytesIO()
+    i = 0
     try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.connect((SERVER_IP, SERVER_PORT))
-            print("Połączono z serwerem.")
+        while True:
+            i += 1
+            # Receive data in chunks
+            chunk = client_socket.recv(CHUNK_SIZE)
+            print(f"got new chunk nr {i}")
+            if not chunk:
+                break
 
-            while True:
-                # Odbierz nagłówek
-                header = sock.recv(8).decode()
-                if not header:
-                    break
+            # Append the chunk to the buffer
+            audio_buffer.write(chunk)
 
-                message_type = header[:4]  # Typ wiadomości (META, DATA)
-                message_length = int(header[4:])  # Długość danych
-
-                # Odbierz dane na podstawie długości podanej w nagłówku
-                body = sock.recv(message_length)
-
-                if message_type == "META":
-                    print(f"Otrzymano metadane: {body.decode()}")
-                elif message_type == "DATA":
-                    audio_data.write(body)
-
-                    # Jeśli audio nie gra, rozpocznij odtwarzanie
-                    if not pygame.mixer.music.get_busy():
-                        audio_data.seek(0)
-                        pygame.mixer.music.load(audio_data)
-                        pygame.mixer.music.play()
-                        audio_data.seek(0, io.SEEK_END)  # Przygotuj bufor na nowe dane
-                else:
-                    print("Nieznany typ wiadomości.")
-                    break
-
-            while pygame.mixer.music.get_busy():
-                pass  # Oczekuj na zakończenie odtwarzania
-
+            # Decode and play the buffer when sufficient data is available
+            if audio_buffer.tell() > CHUNK_SIZE * 50:  # Buffer enough data
+                audio_buffer.seek(0)
+                audio_segment = AudioSegment.from_file(audio_buffer, format="mp3")
+                play(audio_segment)
+                audio_buffer = io.BytesIO()  # Reset buffer
     except Exception as e:
-        print(f"Błąd: {e}")
+        print(f"Error: {e}")
     finally:
-        pygame.mixer.quit()
+        client_socket.close()
 
 if __name__ == "__main__":
-    stream_audio()
+    play_streamed_mp3()

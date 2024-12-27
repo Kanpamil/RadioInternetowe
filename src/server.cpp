@@ -1,87 +1,133 @@
 #include <iostream>
 #include <fstream>
-#include <cstring>
-#include <vector>
+#include <string>
+#include <filesystem>
+#include <thread>
+#include <taglib/fileref.h>
+#include <taglib/tag.h>
+#include <taglib/audioproperties.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-const int PORT = 8080;
-const int BUFFER_SIZE = 4096;
+#define PORT 1100
+#define CHUNK_SIZE 2048
 
-// Funkcja wysyłania metadanych
-void send_metadata(int client_socket, const std::string& metadata) {
-    std::string header = "META" + std::to_string(metadata.size());
-    header.resize(8, '0'); // Ustawienie stałej długości nagłówka
-    send(client_socket, header.c_str(), header.size(), 0);
-    send(client_socket, metadata.c_str(), metadata.size(), 0);
+int getBitrate(const std::string& filePath) {
+    TagLib::FileRef file(filePath.c_str());
+    if (!file.isNull() && file.audioProperties()) {
+        return file.audioProperties()->bitrate();
+    }
+    return 128;  // Default to 128 kbps if bitrate cannot be determined
 }
 
-// Funkcja strumieniowania danych audio
-void stream_audio(int client_socket, const std::string& filename) {
-    std::ifstream file(filename, std::ios::binary);
-    if (!file.is_open()) {
-        std::cerr << "Nie można otworzyć pliku audio.\n";
+void streamMP3File(const std::string& filePath, int clientSocket, int bitrate) {
+    std::ifstream mp3File(filePath, std::ios::binary);
+    if (!mp3File) {
+        std::cerr << "Failed to open MP3 file: " << filePath << std::endl;
         return;
     }
 
-    char buffer[BUFFER_SIZE];
-    while (file.read(buffer, sizeof(buffer)) || file.gcount() > 0) {
-        std::string header = "DATA" + std::to_string(file.gcount());
-        header.resize(8, '0');
-        send(client_socket, header.c_str(), header.size(), 0);
-        send(client_socket, buffer, file.gcount(), 0);
+    int bytesPerSecond = bitrate > 0 ? bitrate * 1000 / 8 : 128 * 1000 / 8;  // Default to 128 kbps
+    float timePerChunk = static_cast<float>(CHUNK_SIZE) / bytesPerSecond;   // Time for each chunk in seconds
+    auto sleepTimeMicros = std::chrono::microseconds(static_cast<int>(timePerChunk * 1e6));
+
+    char buffer[CHUNK_SIZE];
+    while (mp3File.read(buffer, CHUNK_SIZE) || mp3File.gcount() > 0) {
+        size_t bytesRead = mp3File.gcount();
+
+        // Send data to the client
+        size_t totalSent = 0;
+        while (totalSent < bytesRead) {
+            ssize_t bytesSent = send(clientSocket, buffer + totalSent, bytesRead - totalSent, 0);
+            // if (bytesSent < 0) {
+            //     std::cerr << "Failed to send data to client: " << strerror(errno) << std::endl;
+            //     mp3File.close();
+            //     return;
+            // }
+            totalSent += bytesSent;
+        }
+
+        // Delay to simulate real-time streaming
+        std::this_thread::sleep_for(sleepTimeMicros);
     }
-    file.close();
-    std::cout << "Wysłano cały plik audio.\n";
+
+    mp3File.close();
+}
+
+void printMP3Metadata(const std::string& filePath) {
+    TagLib::FileRef file(filePath.c_str());
+
+    if (!file.isNull() && file.tag()) {
+        TagLib::Tag *tag = file.tag();
+
+        std::cout << "Title: " << tag->title() << std::endl;
+        std::cout << "Artist: " << tag->artist() << std::endl;
+        std::cout << "Album: " << tag->album() << std::endl;
+        std::cout << "Year: " << tag->year() << std::endl;
+        std::cout << "Comment: " << tag->comment() << std::endl;
+        std::cout << "Genre: " << tag->genre() << std::endl;
+    }
+
+    if (!file.isNull() && file.audioProperties()) {
+        TagLib::AudioProperties *properties = file.audioProperties();
+
+        std::cout << "Bitrate: " << properties->bitrate() << " kbps" << std::endl;
+        std::cout << "Sample Rate: " << properties->sampleRate() << " Hz" << std::endl;
+        std::cout << "Channels: " << properties->channels() << std::endl;
+        std::cout << "Length: " << properties->length() << " seconds" << std::endl;
+    }
 }
 
 int main() {
-    int server_fd, client_socket;
-    struct sockaddr_in address;
-    int opt = 1;
-    int addrlen = sizeof(address);
-
-    // Tworzenie gniazda
-    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
-        perror("Socket failed");
-        exit(EXIT_FAILURE);
+    int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
+    if (serverSocket < 0) {
+        std::cerr << "Error creating socket." << std::endl;
+        return 1;
     }
 
-    // Ustawienia socketu
-    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt))) {
-        perror("Setsockopt failed");
-        exit(EXIT_FAILURE);
+    sockaddr_in serverAddr;
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_addr.s_addr = INADDR_ANY;
+    serverAddr.sin_port = htons(PORT);
+
+    if (bind(serverSocket, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
+        std::cerr << "Bind failed." << std::endl;
+        close(serverSocket);
+        return 1;
     }
 
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port = htons(PORT);
-
-    // Bindowanie socketu
-    if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
-        perror("Bind failed");
-        exit(EXIT_FAILURE);
+    if (listen(serverSocket, 1) < 0) {
+        std::cerr << "Listen failed." << std::endl;
+        close(serverSocket);
+        return 1;
     }
 
-    // Nasłuchiwanie połączeń
-    if (listen(server_fd, 3) < 0) {
-        perror("Listen failed");
-        exit(EXIT_FAILURE);
+    std::cout << "Server listening on port " << PORT << "..." << std::endl;
+
+    sockaddr_in clientAddr;
+    socklen_t clientAddrLen = sizeof(clientAddr);
+    int clientSocket = accept(serverSocket, (struct sockaddr*)&clientAddr, &clientAddrLen);
+    if (clientSocket < 0) {
+        std::cerr << "Failed to accept client." << std::endl;
+        close(serverSocket);
+        return 1;
     }
 
-    std::cout << "Serwer działa na porcie " << PORT << ". Oczekiwanie na klienta...\n";
+    std::cout << "Client connected." << std::endl;
 
-    if ((client_socket = accept(server_fd, (struct sockaddr*)&address, (socklen_t*)&addrlen)) < 0) {
-        perror("Accept failed");
-        exit(EXIT_FAILURE);
-    }
+    std::string mp3FilePath = "./mp3files/kerry.mp3";  // Path to the MP3 file to stream
 
-    std::cout << "Połączono z klientem.\n";
+    // Print metadata
+    printMP3Metadata(mp3FilePath);
 
+    // Stream MP3 file
+    int bitrate = getBitrate(mp3FilePath);
 
-    close(client_socket);
-    close(server_fd);
+    streamMP3File(mp3FilePath, clientSocket, bitrate);
+
+    close(clientSocket);
+    close(serverSocket);
     return 0;
 }

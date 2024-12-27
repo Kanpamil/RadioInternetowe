@@ -2,28 +2,31 @@
 CXX = g++
 CXXFLAGS = -std=c++17 -Wall -O2
 PYTHON = python3
-CPP_SOURCES = $(wildcard src/*.cpp)
-CPP_OBJECTS = $(CPP_SOURCES:.cpp=.o)
-EXECUTABLE = bin/server.out
+SRC_DIR = src
+OBJ_DIR = bin
+CPP_SOURCES = $(wildcard $(SRC_DIR)/*.cpp)
+CPP_OBJECTS = $(patsubst $(SRC_DIR)/%.cpp, $(OBJ_DIR)/%.o, $(CPP_SOURCES))
+EXECUTABLE = $(OBJ_DIR)/server.out
 PYTHON_SCRIPTS = $(wildcard scripts/*.py)
 
 # Default target
-all: build
+all: $(EXECUTABLE)
 
 # Rule to build the C++ executable
-build: $(CPP_OBJECTS)
+$(EXECUTABLE): $(CPP_OBJECTS)
 	@echo "Linking C++ objects..."
-	$(CXX) $(CXXFLAGS) -o $(EXECUTABLE) $(CPP_OBJECTS)
+	$(CXX) $(CXXFLAGS) -o $@ $(CPP_OBJECTS) -ltag
 
-# Rule to compile C++ source files into objects
-%.o: %.cpp
+# Rule to compile C++ source files into objects in the bin directory
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
+	@mkdir -p $(OBJ_DIR)
 	@echo "Compiling $<..."
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # Rule to clean up build artifacts
 clean:
 	@echo "Cleaning up..."
-	rm -f $(CPP_OBJECTS) $(EXECUTABLE)
+	rm -rf $(OBJ_DIR)/*
 
 # Rule to run Python scripts
 run-python:
@@ -39,4 +42,4 @@ test-python:
 	$(PYTHON) -m unittest discover -s tests -p "*.py"
 
 # Phony targets
-.PHONY: all build clean run-python test-python
+.PHONY: all clean run-python test-python
