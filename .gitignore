@@ -1,2 +1,4 @@
 #ignore binary
 bin/
+#ignore local mp3 files
+mp3all/
