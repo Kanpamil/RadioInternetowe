@@ -1,45 +1,20 @@
-# Variables
 CXX = g++
-CXXFLAGS = -std=c++17 -Wall -O2
-PYTHON = python3
-SRC_DIR = src
-OBJ_DIR = bin
-CPP_SOURCES = $(wildcard $(SRC_DIR)/*.cpp)
-CPP_OBJECTS = $(patsubst $(SRC_DIR)/%.cpp, $(OBJ_DIR)/%.o, $(CPP_SOURCES))
-EXECUTABLE = $(OBJ_DIR)/server.out
-PYTHON_SCRIPTS = $(wildcard scripts/*.py)
+CXXFLAGS = -std=c++17 -Wall -Wextra $(shell pkg-config --cflags libavformat libavcodec libavutil libswscale libswresample)
+LDFLAGS = $(shell pkg-config --libs libavformat libavcodec libavutil libswscale libswresample)
 
-# Default target
-all: $(EXECUTABLE)
+SOURCES = $(wildcard src/*.cpp)
+BIN_DIR = bin
+TARGETS = $(SOURCES:src/%.cpp=$(BIN_DIR)/%.out)
 
-# Rule to build the C++ executable
-$(EXECUTABLE): $(CPP_OBJECTS)
-	@echo "Linking C++ objects..."
-	$(CXX) $(CXXFLAGS) -o $@ $(CPP_OBJECTS) -ltag
+all: $(TARGETS)
 
-# Rule to compile C++ source files into objects in the bin directory
-$(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
-	@mkdir -p $(OBJ_DIR)
-	@echo "Compiling $<..."
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+$(BIN_DIR)/%.out: src/%.cpp
+	@mkdir -p $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS)
 
-# Rule to clean up build artifacts
+%.out: %.cpp
+	$(CXX) $(CXXFLAGS) -o $(BIN_DIR)/$@ $< $(LDFLAGS)
 clean:
-	@echo "Cleaning up..."
-	rm -rf $(OBJ_DIR)/*
+	rm -f $(TARGETS)
+	@rmdir --ignore-fail-on-non-empty $(BIN_DIR) 2>/dev/null || true
 
-# Rule to run Python scripts
-run-python:
-	@echo "Running Python scripts..."
-	@for script in $(PYTHON_SCRIPTS); do \
-		echo "Running $$script"; \
-		$(PYTHON) $$script; \
-	done
-
-# Rule to test Python code
-test-python:
-	@echo "Testing Python scripts..."
-	$(PYTHON) -m unittest discover -s tests -p "*.py"
-
-# Phony targets
-.PHONY: all clean run-python test-python

@@ -16,6 +16,8 @@
 #include <queue>
 #include <signal.h>
 
+
+
 #define PORT 1100
 #define CHUNK_SIZE 4096
 char buffer[CHUNK_SIZE];
@@ -54,73 +56,73 @@ void sendFileQueue(int clientSocket, const std::vector<std::string>& fileQueue) 
     send(clientSocket, queueData.c_str(), queueData.size(), 0);
 }
 
-void sendMetadata(int clientSocket, const std::string& filePath) {
-    TagLib::FileRef file(filePath.c_str());
-    std::ostringstream metadata;
+// void sendMetadata(int clientSocket, const std::string& filePath) {
+//     TagLib::FileRef file(filePath.c_str());
+//     std::ostringstream metadata;
 
-    if (!file.isNull() && file.tag()) {
-        TagLib::Tag *tag = file.tag();
-        metadata << "Title: " << tag->title() << "\n";
-        metadata << "Artist: " << tag->artist() << "\n";
-        metadata << "Album: " << tag->album() << "\n";
-        metadata << "Year: " << tag->year() << "\n";
-        metadata << "Comment: " << tag->comment() << "\n";
-        metadata << "Genre: " << tag->genre() << "\n";
-    }
+//     if (!file.isNull() && file.tag()) {
+//         TagLib::Tag *tag = file.tag();
+//         metadata << "Title: " << tag->title() << "\n";
+//         metadata << "Artist: " << tag->artist() << "\n";
+//         metadata << "Album: " << tag->album() << "\n";
+//         metadata << "Year: " << tag->year() << "\n";
+//         metadata << "Comment: " << tag->comment() << "\n";
+//         metadata << "Genre: " << tag->genre() << "\n";
+//     }
 
-    if (!file.isNull() && file.audioProperties()) {
-        TagLib::AudioProperties *properties = file.audioProperties();
-        metadata << "Bitrate: " << properties->bitrate() << " kbps\n";
-        metadata << "Sample Rate: " << properties->sampleRate() << " Hz\n";
-        metadata << "Channels: " << properties->channels() << "\n";
-        metadata << "Length: " << properties->length() << " seconds\n";
-    }
+//     if (!file.isNull() && file.audioProperties()) {
+//         TagLib::AudioProperties *properties = file.audioProperties();
+//         metadata << "Bitrate: " << properties->bitrate() << " kbps\n";
+//         metadata << "Sample Rate: " << properties->sampleRate() << " Hz\n";
+//         metadata << "Channels: " << properties->channels() << "\n";
+//         metadata << "Length: " << properties->length() << " seconds\n";
+//     }
 
-    std::string metadataStr = metadata.str();
-    std::cout << "Sending metadata to client: " << metadataStr << std::endl;
-    send(clientSocket, metadataStr.c_str(), metadataStr.size(), 0);
-}
+//     std::string metadataStr = metadata.str();
+//     std::cout << "Sending metadata to client: " << metadataStr << std::endl;
+//     send(clientSocket, metadataStr.c_str(), metadataStr.size(), 0);
+// }
 
-int getBitrate(const std::string& filePath) {
-    TagLib::FileRef file(filePath.c_str());
-    if (!file.isNull() && file.audioProperties()) {
-        return file.audioProperties()->bitrate();
-    }
-    return 128;  // Default to 128 kbps if bitrate cannot be determined
-}
+// int getBitrate(const std::string& filePath) {
+//     TagLib::FileRef file(filePath.c_str());
+//     if (!file.isNull() && file.audioProperties()) {
+//         return file.audioProperties()->bitrate();
+//     }
+//     return 128;  // Default to 128 kbps if bitrate cannot be determined
+// }
 
-void streamMP3File(const std::string& filePath, int clientSocket){
-    int bitrate = getBitrate(filePath);
-    std::ifstream mp3File(filePath, std::ios::binary);
-    if (!mp3File) {
-        std::cerr << "Failed to open MP3 file: " << filePath << std::endl;
-        return;
-    }
+// void streamMP3File(const std::string& filePath, int clientSocket){
+//     int bitrate = getBitrate(filePath);
+//     std::ifstream mp3File(filePath, std::ios::binary);
+//     if (!mp3File) {
+//         std::cerr << "Failed to open MP3 file: " << filePath << std::endl;
+//         return;
+//     }
 
-    int bytesPerSecond = bitrate > 0 ? bitrate * 1000 / 8 : 128 * 1000 / 8;  // Default to 128 kbps
-    float timePerChunk = static_cast<float>(CHUNK_SIZE) / bytesPerSecond;   // Time for each chunk in seconds
-    auto sleepTimeMicros = std::chrono::microseconds(static_cast<int>(timePerChunk * 1e6));
+//     int bytesPerSecond = bitrate > 0 ? bitrate * 1000 / 8 : 128 * 1000 / 8;  // Default to 128 kbps
+//     float timePerChunk = static_cast<float>(CHUNK_SIZE) / bytesPerSecond;   // Time for each chunk in seconds
+//     auto sleepTimeMicros = std::chrono::microseconds(static_cast<int>(timePerChunk * 1e6));
 
-    char buffer[CHUNK_SIZE];
-    while (mp3File.read(buffer, CHUNK_SIZE) || mp3File.gcount() > 0) {
-        // Send data to the client
-        ssize_t bytesSent = send(clientSocket, buffer, sizeof(buffer), 0);
-        if (bytesSent < 0) {
-            if (errno == EPIPE) {
-                std::cerr << "Client disconnected. EPIPE error encountered." << std::endl;
-                break;  // Stop further attempts to send to this client
-            } 
-            else {
-                std::cerr << "Error sending data: " << strerror(errno) << std::endl;
-            }
-        }
+//     char buffer[CHUNK_SIZE];
+//     while (mp3File.read(buffer, CHUNK_SIZE) || mp3File.gcount() > 0) {
+//         // Send data to the client
+//         ssize_t bytesSent = send(clientSocket, buffer, sizeof(buffer), 0);
+//         if (bytesSent < 0) {
+//             if (errno == EPIPE) {
+//                 std::cerr << "Client disconnected. EPIPE error encountered." << std::endl;
+//                 break;  // Stop further attempts to send to this client
+//             } 
+//             else {
+//                 std::cerr << "Error sending data: " << strerror(errno) << std::endl;
+//             }
+//         }
 
-        // Delay to simulate real-time streaming
-        std::this_thread::sleep_for(sleepTimeMicros);
-    }
+//         // Delay to simulate real-time streaming
+//         std::this_thread::sleep_for(sleepTimeMicros);
+//     }
 
-    mp3File.close();
-}
+//     mp3File.close();
+// }
 
 int main() {
     signal(SIGINT, signalHandler);
@@ -167,9 +169,9 @@ int main() {
         std::cout << "Client connected." << std::endl;
         std::cout << "Client IP: " << inet_ntoa(clientAddr.sin_addr) << std::endl;
         std::cout << "Client port: " << ntohs(clientAddr.sin_port) << std::endl;
-        sendFileQueue(clientSocket, fileQueue);
-        sendMetadata(clientSocket, fileQueue[0]);
-        streamMP3File(fileQueue[0], clientSocket);
+        // sendFileQueue(clientSocket, fileQueue);
+        // sendMetadata(clientSocket, fileQueue[0]);
+        // streamMP3File(fileQueue[0], clientSocket);
         std::cout << "Streaming ended" << std::endl;
         close(clientSocket);
     }
