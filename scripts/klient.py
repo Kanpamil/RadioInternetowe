@@ -7,6 +7,7 @@ import io
 
 SERVER_HOST = 'localhost'
 SERVER_PORT = 1100
+SERVER_STREAMING_PORT = 1101
 CHUNK_SIZE = 4096
 
 def receive_file_queue(client_socket):
@@ -74,15 +75,11 @@ def play_streamed_mp3(client_socket):
 if __name__ == '__main__':
     client_socket = socket.socket()
     client_socket.connect((SERVER_HOST, SERVER_PORT))
-
-    # Receive the file queue
-    file_queue = receive_file_queue(client_socket)
-    print("File queue:", file_queue)
-
-    # Receive the metadata
-    metadata = receive_metadata(client_socket)
-    print("Metadata:", metadata)
-
-    # Play the streamed mp3
-    play_streamed_mp3(client_socket)
+    client_streaming_socket = socket.socket()
+    client_streaming_socket.connect((SERVER_HOST, SERVER_STREAMING_PORT))
+    
+    client_socket.send("HELLO".encode('utf-8'))
+    message = client_streaming_socket.recv(2048)
+    print(message.decode('utf-8'))
+    
     client_socket.close()
