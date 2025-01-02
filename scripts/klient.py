@@ -1,19 +1,22 @@
 import socket
+import time
 import threading
 from pydub import AudioSegment
 from pydub.playback import play
 import simpleaudio as sa
 import io
+import os
 
 SERVER_HOST = 'localhost'
 SERVER_PORT = 1100
 SERVER_STREAMING_PORT = 1101
 CHUNK_SIZE = 4096
+MESSAGE_SIZE = 256
 
 def receive_file_queue(client_socket):
     print("Receiving file queue...")
     try:
-        data = client_socket.recv(2048).decode('utf-8')
+        data = client_socket.recv(CHUNK_SIZE).decode('utf-8')
     except UnicodeDecodeError as e:
         print(f"Decoding error: {e}")
         data = None
@@ -23,7 +26,7 @@ def receive_file_queue(client_socket):
 def receive_metadata(client_socket):
     print("Receiving metadata...")
     try:
-        data = client_socket.recv(2048).decode('utf-8')
+        data = client_socket.recv(CHUNK_SIZE).decode('utf-8')
     except UnicodeDecodeError as e:
         print(f"Decoding error: {e}")
         data = None
@@ -72,14 +75,47 @@ def play_streamed_mp3(client_socket):
     except Exception as e:
         print(f"Error: {e}")
 
+def send_mp3_file(file_path, client_socket):
+    try:
+        file_size = os.path.getsize(file_path)  # Get the size of the file
+        client_socket.send(str(file_size).encode('utf-8'))  # Send the file size
+        client_socket.recv(MESSAGE_SIZE)  # Wait for the server to acknowledge
+
+        with open(file_path, 'rb') as file:
+            while chunk := file.read(CHUNK_SIZE):  # Read file in chunks
+                client_socket.sendall(chunk)  # Send each chunk
+
+        print("File sent successfully.")
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
 if __name__ == '__main__':
-    client_socket = socket.socket()
-    client_socket.connect((SERVER_HOST, SERVER_PORT))
-    client_streaming_socket = socket.socket()
-    client_streaming_socket.connect((SERVER_HOST, SERVER_STREAMING_PORT))
-    
-    client_socket.send("HELLO".encode('utf-8'))
-    message = client_streaming_socket.recv(2048)
-    print(message.decode('utf-8'))
-    
-    client_socket.close()
+    try:
+        client_socket = socket.socket()
+        client_socket.connect((SERVER_HOST, SERVER_PORT))
+        client_streaming_socket = socket.socket()
+        client_streaming_socket.connect((SERVER_HOST, SERVER_STREAMING_PORT))
+        while(True):
+            action = input("Action: 'FILE'/'STREAM/'HELLO'")
+
+            if action == 'FILE':
+                client_socket.send(action.encode('utf-8'))
+                fileName = input("Enter file name: ")
+                print(fileName)
+                client_socket.send(fileName.encode('utf-8'))
+                handshake = client_socket.recv(MESSAGE_SIZE)
+                print(handshake.decode('utf-8'))
+                send_mp3_file('../mp3all/'+fileName, client_socket)
+
+            elif action == 'STREAM':
+                play_streamed_mp3(client_streaming_socket)
+
+            elif action == 'HELLO':
+                client_socket.send(action.encode('utf-8'))
+                handshake = client_socket.recv(MESSAGE_SIZE)
+                client_socket.send("Hello".encode('utf-8'))
+            else:
+                print("Invalid action.")
+    except Exception as KeyboardInterrupt:
+        client_socket.close()       

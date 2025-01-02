@@ -91,11 +91,16 @@ void streamMP3(const char* filename, int clientSocket) {
 
     // Simulate real-time streaming
     while (av_read_frame(formatContext, &packet) >= 0) {
-        ssize_t bytesSent = send(clientSocket, packet.data, packet.size, 0);
-        if (bytesSent < 0) {
-            std::cerr << "Error sending data to client." << std::endl;
-            break;
+        clientSocketMutex.lock();
+        for(int i = 0; i < streamingSockets.size(); i++) {
+            int clientSocket = streamingSockets[i];
+            ssize_t bytesSent = send(clientSocket, packet.data, packet.size, 0);
+            if (bytesSent < 0) {
+                std::cerr << "Error sending data to client." << std::endl;
+                break;
+            }
         }
+        clientSocketMutex.unlock();
         av_packet_unref(&packet);
 
         // Simulate real-time streaming by waiting for the estimated packet duration
@@ -112,12 +117,27 @@ void save_file(const std::string& file_name, const char* data, size_t size) {
     file.close();
 }
 
-void get_file(int client_socket) {
+void get_file(int client_socket, std::string file_name) {
+
+
+    // Receive the file size
+    char size_buffer[CHUNK_SIZE];
+    ssize_t size_bytes = recv(client_socket, size_buffer, CHUNK_SIZE, 0);
+    if (size_bytes <= 0) {
+        std::cerr << "Failed to receive file size." << std::endl;
+        return;
+    }
+    size_buffer[size_bytes] = '\0';  // Null-terminate the string
+    size_t file_size = std::stoul(size_buffer);
+    send(client_socket, "SIZE_OK", 7, 0);  // Acknowledge file size
+
     size_t total_bytes_received = 0;
     char buffer[CHUNK_SIZE];
-    // Receive the MP3 file in chunks
     std::string file_data;
-    while (true) {
+    file_data.clear();
+
+    // Receive the file in chunks until the total size is reached
+    while (total_bytes_received < file_size) {
         ssize_t bytes_received = recv(client_socket, buffer, CHUNK_SIZE, 0);
         if (bytes_received <= 0) {
             break;
@@ -125,38 +145,92 @@ void get_file(int client_socket) {
         file_data.append(buffer, bytes_received);
         total_bytes_received += bytes_received;
     }
-    fileQueue.push_back(file_data);
     std::cout << "Received file, total bytes: " << total_bytes_received << std::endl;
 
-    // Optionally save the file to disk
-    save_file("mp3files/received_audio.mp3", file_data.c_str(), file_data.size());
+    if (total_bytes_received != file_size) {
+    std::cerr << "File transfer incomplete: expected " << file_size 
+              << " bytes but received " << total_bytes_received << " bytes." << std::endl;
+    return;
+    }
+
+    file_name = "mp3files/" + file_name;
+    fileQueue.push_back(file_name);
+    save_file(file_name, file_data.c_str(), file_data.size());
+}
+
+std::string get_name(int client_socket) {
+    char buffer[CHUNK_SIZE];
+    bzero(buffer, CHUNK_SIZE);
+    ssize_t bytes_received = recv(client_socket, buffer, CHUNK_SIZE, 0);
+    if(bytes_received < 0) {
+        std::cerr << "Error receiving data from client." << std::endl;
+        return "invalid";
+    }
+    return std::string(buffer);
 }
 
 // Function to handle multiple clients and stream data
 void handleClient(int clientSocket, int clientStreamSocket) {
-    char buffer[CHUNK_SIZE];
+    while(true){
+        char buffer[CHUNK_SIZE] ;
+        char message[CHUNK_SIZE] ;
+        bzero(buffer, CHUNK_SIZE);
+        bzero(message, CHUNK_SIZE);
+        ssize_t bytes_received = recv(clientSocket, buffer, CHUNK_SIZE, 0);
+        if(bytes_received < 0) {
+            std::cerr << "Error receiving data from client." << std::endl;
+            return;
+        }
+        if(bytes_received == 0) {
+            break;
+        }
+        std::cout << "Received: " << buffer << std::endl;
 
-    ssize_t bytes_received = recv(clientSocket, buffer, CHUNK_SIZE, 0);
-    if(bytes_received < 0) {
-        std::cerr << "Error receiving data from client." << std::endl;
-        return;
-    }
-    if(strcmp(buffer, "HELLO") == 0) {
-        std::cout << "Client says hello" << std::endl;
-        ssize_t bytes_sent = send(clientStreamSocket, "SIEMANO", 7, 0);
-        if (bytes_sent < 0) {
-            std::cerr << "Error sending data to client." << std::endl;
+        if(strcmp(buffer, "HELLO") == 0) {
+            
+            std::cout << "Client says hello" << std::endl;
+            ssize_t bytes_sent = send(clientSocket, "HI", 2, 0);
+            if(bytes_sent < 0) {
+                std::cerr << "Handshake gone wrong" << std::endl;
+            }
+            ssize_t bytes_message = recv(clientSocket, message, CHUNK_SIZE, 0);
+            if (bytes_message < 0) {
+                std::cerr << "Error getting data from client." << std::endl;
+            }
+        }
+
+        if(strcmp(buffer, "FILE") == 0) {
+            std::string file_name;
+            file_name.clear();
+            file_name = get_name(clientSocket);
+
+            if(file_name.empty() || file_name == "invalid") {
+                std::cerr << "Invalid file name received." << std::endl;
+                continue;
+            }
+
+            std::cout << "Client wants to send file: " << file_name << std::endl;
+            
+            ssize_t bytes_sent = send(clientSocket, "OK", 3, 0);
+            if(bytes_sent < 0) {
+                std::cerr << "Handshake gone wrong" << std::endl;
+            }
+            std::cout << "Handshake sent" << std::endl;
+            get_file(clientSocket,file_name);
+        }
+
+        if(strcmp(buffer, "STREAMCOMING") == 0) {
+            clientSocketMutex.lock();
+            streamingSockets.push_back(clientStreamSocket);
+            clientSocketMutex.unlock();
+        }
+
+        if(strcmp(buffer, "END") == 0) {
+            break;
         }
     }
-    if(strcmp(buffer, "FILECOMING") == 0) {
-        get_file(clientSocket);
-    }
-    if(strcmp(buffer, "STREAMCOMING") == 0) {
-        clientSocketMutex.lock();
-        streamingSockets.push_back(clientStreamSocket);
-        clientSocketMutex.unlock();
-    }
-        
+    close(clientSocket);
+    close(clientStreamSocket);
 }
 
 int main() {
@@ -189,21 +263,18 @@ int main() {
         close(serverControlSocket);
         return 1;
     }
-    std::cout << "ELO" << std::endl;
     if (bind(serverStreamSocket, (struct sockaddr*)&serverStreamAddr, sizeof(serverStreamAddr)) < 0) {
         std::cerr << "Bind failed." << std::endl;
         close(serverControlSocket);
         close(serverStreamSocket);
         return 1;
     }
-    std::cout << "ELO" << std::endl;
     if (listen(serverControlSocket, 5) < 0) {
         std::cerr << "Listen failed." << std::endl;
         close(serverStreamSocket);
         close(serverControlSocket);
         return 1;
     }
-    std::cout << "ELO" << std::endl;
     if (listen(serverStreamSocket, 5) < 0) {
         std::cerr << "Listen failed." << std::endl;
         close(serverStreamSocket);
