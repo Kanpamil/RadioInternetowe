@@ -3,6 +3,7 @@ import time
 import threading
 from pydub import AudioSegment
 from pydub.playback import play
+import pygame
 import simpleaudio as sa
 import io
 import os
@@ -12,6 +13,8 @@ SERVER_PORT = 1100
 SERVER_STREAMING_PORT = 1101
 CHUNK_SIZE = 4096
 MESSAGE_SIZE = 256
+
+stop_streaming = threading.Event()
 
 def receive_file_queue(client_socket):
     print("Receiving file queue...")
@@ -32,48 +35,71 @@ def receive_metadata(client_socket):
         data = None
     return data
 
-def play_audio_segment(audio_segment):
-    # Convert AudioSegment to raw audio data
-    raw_data = audio_segment.raw_data
-    play_obj = sa.play_buffer(raw_data, num_channels=audio_segment.channels, 
-                              bytes_per_sample=audio_segment.sample_width, 
-                              sample_rate=audio_segment.frame_rate)
-    play_obj.wait_done()  # Wait until playback finishes
-
-def play_streamed_mp3(client_socket):
-    audio_buffer = io.BytesIO()  # buffer to hold the audio data in memory
-    total_data_received = 0
-    play_thread = None
+def clear_socket_buffer(client_socket):
+    """Clear any leftover data in the socket buffer."""
     try:
+        client_socket.settimeout(1)  # Set a timeout of 1 second (adjust as necessary)
         while True:
+            data = client_socket.recv(1024)  # Try to read data from the socket
+            if not data:
+                break  # Break when no more data is available
+    except socket.timeout:
+        pass  # Timeout reached, no more data to read
+    finally:
+        client_socket.settimeout(None)  # Reset the timeout back to blocking mode
+
+def receiveMP3File(client_streaming_socket):
+    try:
+        print("elo")
+        audio_buffer = io.BytesIO()  # Create an in-memory buffer
+
+        file_size = client_streaming_socket.recv(MESSAGE_SIZE)# Get the file size
+        print(file_size)
+        file_size = file_size.decode('utf-8')
+        print(file_size)
+        file_size = int(file_size)
+        print(f"Receiving MP3 file of size {file_size} bytes...")
+        client_streaming_socket.send("OK".encode('utf-8'))
+        print("sent acknowledgment after filesize")  # Acknowledge the file size
+        received_size = 0
+        while received_size < file_size:
+            if received_size == 0:
+                print("Receiving first chunk")
             # Receive data in chunks
-            chunk = client_socket.recv(CHUNK_SIZE)
+            chunk = client_streaming_socket.recv(CHUNK_SIZE)
             if not chunk:
                 break
 
-            # Append the chunk to the buffer
+            # Write the chunk to the buffer
             audio_buffer.write(chunk)
-            total_data_received += len(chunk)
+            received_size += len(chunk)
 
-            # If we have enough data (50 chunks), process for playback
-            if total_data_received > CHUNK_SIZE * 50:
-                # Prepare the audio segment
-                audio_buffer.seek(0)
-                audio_segment = AudioSegment.from_file(audio_buffer, format="mp3")
-                
-                # Ensure no other thread is playing audio
-                if play_thread and play_thread.is_alive():
-                    play_thread.join()  # Wait for the previous thread to finish
-                
-                # Start playing audio in a new thread
-                play_thread = threading.Thread(target=play_audio_segment, args=(audio_segment,))
-                play_thread.start()
+        # Reset the buffer and convert to an audio segment
+        client_streaming_socket.send("OK".encode('utf-8'))  # Acknowledge the file size
+        print("sent acknowledgment after receiving file")
+        audio_buffer.seek(0)
+        audio_segment = AudioSegment.from_file(audio_buffer, format="mp3")
+        del audio_buffer  # Delete the buffer to free up memory
+        del file_size
+        del received_size
+        return audio_segment
 
-                # Reset the buffer after starting playback
-                audio_buffer = io.BytesIO()
-                total_data_received = 0
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error receiving MP3 file: {e}")
+
+
+def play_file(filename, start_time):
+    pygame.mixer.init()
+    pygame.mixer.music.load(filename)
+    pygame.mixer.music.play(start=start_time)
+
+    while pygame.mixer.music.get_busy():
+        if stop_streaming.is_set():
+            print("Stopping playback...")
+            pygame.mixer.music.stop()
+            break
+        time.sleep(1)
+
 
 def send_mp3_file(file_path, client_socket):
     try:
@@ -92,6 +118,7 @@ def send_mp3_file(file_path, client_socket):
 
 if __name__ == '__main__':
     try:
+        streaming = False
         client_socket = socket.socket()
         client_socket.connect((SERVER_HOST, SERVER_PORT))
         client_streaming_socket = socket.socket()
@@ -109,12 +136,39 @@ if __name__ == '__main__':
                 send_mp3_file('../mp3all/'+fileName, client_socket)
 
             elif action == 'STREAM':
-                play_streamed_mp3(client_streaming_socket)
+                if streaming:
+                    print("Already streaming")
+                    continue
+                client_socket.send(action.encode('utf-8'))
+                audio_Segment = receiveMP3File(client_streaming_socket)
+                tracktime = client_streaming_socket.recv(MESSAGE_SIZE)
+                tracktime = int(tracktime.decode('utf-8'))
+                clear_socket_buffer(client_streaming_socket)
+                print(f"Start from {tracktime} seconds")
+                stop_streaming.clear()
+                streaming_thread = threading.Thread(target=play_file, args=(audio_Segment.export(format='mp3'), tracktime))
+                streaming_thread.start()
+                streaming = True
+                del tracktime
+                del audio_Segment
+            elif action == 'STOP':
+                if streaming:
+                    stop_streaming.set()
+                    streaming_thread.join()
+                    streaming = False
+                    print("Streaming stopped")
+                else:
+                    print("Not streaming")
+                
 
             elif action == 'HELLO':
                 client_socket.send(action.encode('utf-8'))
                 handshake = client_socket.recv(MESSAGE_SIZE)
                 client_socket.send("Hello".encode('utf-8'))
+
+            elif action == "END":
+                client_socket.send(action.encode('utf-8'))
+                break
             else:
                 print("Invalid action.")
     except Exception as KeyboardInterrupt:
