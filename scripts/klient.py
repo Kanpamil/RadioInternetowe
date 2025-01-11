@@ -11,19 +11,29 @@ import os
 SERVER_HOST = 'localhost'
 SERVER_PORT = 1100
 SERVER_STREAMING_PORT = 1101
+SERVER_QUEUE_PORT = 1102
 CHUNK_SIZE = 4096
 MESSAGE_SIZE = 256
-
-stop_streaming = threading.Event()
+file_queue = []
+stop_playing = threading.Event()
+streaming = False
+playing = False
+working = True
 
 def receive_file_queue(client_socket):
-    print("Receiving file queue...")
     try:
+        # Receive the file queue as a single string
         data = client_socket.recv(CHUNK_SIZE).decode('utf-8')
+        
+        # Split the received data by newlines to get individual track names
+        track_list = data.splitlines()
+        
+        # Return the list of tracks
+        return track_list
     except UnicodeDecodeError as e:
         print(f"Decoding error: {e}")
-        data = None
-    return data
+        return []  # Return an empty list in case of error
+
 
 
 def receive_metadata(client_socket):
@@ -87,18 +97,51 @@ def receiveMP3File(client_streaming_socket):
     except Exception as e:
         print(f"Error receiving MP3 file: {e}")
 
-
+#play file in thread
 def play_file(filename, start_time):
+    global playing
     pygame.mixer.init()
     pygame.mixer.music.load(filename)
     pygame.mixer.music.play(start=start_time)
 
     while pygame.mixer.music.get_busy():
-        if stop_streaming.is_set():
+        if stop_playing.is_set():
             print("Stopping playback...")
             pygame.mixer.music.stop()
+            playing = False
+            
             break
         time.sleep(1)
+    playing = False
+#check for streaming in thread
+def stream_song(client_socket, client_streaming_socket):
+    global working
+    global playing
+    global streaming
+    while(working == True):
+        if streaming == True and playing == False:
+            client_socket.send('STREAM'.encode('utf-8'))
+            audio_Segment = receiveMP3File(client_streaming_socket)
+            tracktime = client_streaming_socket.recv(MESSAGE_SIZE)
+            tracktime = int(tracktime.decode('utf-8'))
+            clear_socket_buffer(client_streaming_socket)
+            print(f"Start from {tracktime} seconds")
+            stop_playing.clear()
+            playing_thread = threading.Thread(target=play_file, args=(audio_Segment.export(format='mp3'), tracktime))
+            playing_thread.start()
+            playing = True
+            del tracktime
+            del audio_Segment
+        elif streaming == False and playing == True:
+            stop_playing.set()
+            playing_thread.join()
+            playing = False
+        else:
+            time.sleep(1)
+    if playing:
+        stop_playing.set()
+        playing_thread.join()
+        playing = False
 
 
 def send_mp3_file(file_path, client_socket):
@@ -116,16 +159,31 @@ def send_mp3_file(file_path, client_socket):
     except Exception as e:
         print(f"An error occurred: {e}")
 
+
+def queue_getter(client_queue_socket):
+    global file_queue
+    while(working):
+        file_queue = receive_file_queue(client_queue_socket)
+        time.sleep(2)
+
+
 if __name__ == '__main__':
     try:
-        streaming = False
         client_socket = socket.socket()
         client_socket.connect((SERVER_HOST, SERVER_PORT))
         client_streaming_socket = socket.socket()
         client_streaming_socket.connect((SERVER_HOST, SERVER_STREAMING_PORT))
+        client_queue_socket = socket.socket()
+        client_queue_socket.connect((SERVER_HOST, SERVER_QUEUE_PORT))
+        print("Connected to server.")
+        streaming_thread = threading.Thread(target=stream_song, args=(client_socket,client_streaming_socket))
+        streaming_thread.start()
+        queue_thread = threading.Thread(target=queue_getter, args=(client_queue_socket,))
+        queue_thread.start()
         while(True):
-            action = input("Action: 'FILE'/'STREAM/'HELLO'")
-
+            #get next song from server if streaming is on and song isnt playing
+            
+            action = input("Action: 'FILE'/'STREAM/'HELLO'/'QUEUE'/'STOP'/'END': ")
             if action == 'FILE':
                 client_socket.send(action.encode('utf-8'))
                 fileName = input("Enter file name: ")
@@ -135,31 +193,38 @@ if __name__ == '__main__':
                 print(handshake.decode('utf-8'))
                 send_mp3_file('../mp3all/'+fileName, client_socket)
 
-            elif action == 'STREAM':
+            elif action == 'STREAM': 
                 if streaming:
                     print("Already streaming")
                     continue
-                client_socket.send(action.encode('utf-8'))
-                audio_Segment = receiveMP3File(client_streaming_socket)
-                tracktime = client_streaming_socket.recv(MESSAGE_SIZE)
-                tracktime = int(tracktime.decode('utf-8'))
-                clear_socket_buffer(client_streaming_socket)
-                print(f"Start from {tracktime} seconds")
-                stop_streaming.clear()
-                streaming_thread = threading.Thread(target=play_file, args=(audio_Segment.export(format='mp3'), tracktime))
-                streaming_thread.start()
                 streaming = True
-                del tracktime
-                del audio_Segment
+
             elif action == 'STOP':
                 if streaming:
-                    stop_streaming.set()
-                    streaming_thread.join()
                     streaming = False
                     print("Streaming stopped")
                 else:
                     print("Not streaming")
+            
+            elif action == 'QUEUECHANGE':
+                client_socket.send(action.encode('utf-8'))
+                handshake = client_socket.recv(MESSAGE_SIZE)
+                queue_change = input("Enter queue action: ")
+                if(queue_change == 'ADD'):
+                    fileName = input("Enter file name: ")
+                    client_socket.send(queue_change.encode('utf-8'))
+                    client_socket.send(fileName.encode('utf-8'))
+                elif(queue_change == 'DELETE'):
+                    client_socket.send(queue_change.encode('utf-8'))
+                    handshake = client_socket.recv(MESSAGE_SIZE)
+                    fileIndex = input("Enter track index: ")
+                    fileIndex = int(fileIndex)
+                    print(file_queue[fileIndex])
+                    client_socket.send(file_queue[fileIndex].encode('utf-8'))
                 
+
+            elif action == "QUEUE":
+                print(file_queue)
 
             elif action == 'HELLO':
                 client_socket.send(action.encode('utf-8'))
@@ -168,6 +233,13 @@ if __name__ == '__main__':
 
             elif action == "END":
                 client_socket.send(action.encode('utf-8'))
+                working = False
+                streaming = False
+                client_streaming_socket.close()
+                client_queue_socket.close()
+                queue_thread.end()
+                streaming_thread.join()
+                queue_thread.join()
                 break
             else:
                 print("Invalid action.")

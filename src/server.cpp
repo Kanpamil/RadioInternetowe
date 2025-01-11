@@ -12,6 +12,8 @@
 #include <mutex>
 #include <queue>
 #include <signal.h>
+#include <fcntl.h>
+#include <algorithm>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -22,11 +24,12 @@ extern "C" {
 
 #define CONTROL_PORT 1100
 #define STREAM_PORT 1101
+#define QUEUE_PORT 1102
 #define CHUNK_SIZE 4096
 #define LUI long unsigned int
 
 std::vector<int> streamingSockets;
-std::mutex clientSocketMutex;
+std::mutex fileQueueMutex;
 std::mutex momentLock;
 std::mutex fileLock;
 std::vector<std::string> fileQueue;
@@ -34,7 +37,9 @@ std::string streamedFile;
 int trackMoment = 0;
 int serverControlSocket = -1;
 int serverStreamSocket = -1;
+int serverQueueSocket = -1;
 bool running = true;
+bool nosongs = false;
 
 void signalHandler(int signal);
 
@@ -45,19 +50,56 @@ void get_file(int client_socket, std::string file_name);
 
 std::string get_name(int client_socket);
 
+//Functions to check for client disconnection
+void setNonBlocking(int socket_fd) {
+    int flags = fcntl(socket_fd, F_GETFL, 0);
+    fcntl(socket_fd, F_SETFL, flags | O_NONBLOCK);
+}
+
+void setBlocking(int socket_fd) {
+    int flags = fcntl(socket_fd, F_GETFL, 0);
+    fcntl(socket_fd, F_SETFL, flags & ~O_NONBLOCK);
+}
+
+bool isSocketOpen(int client_socket) {
+    setNonBlocking(client_socket);
+
+    char buffer[1];
+    int bytes_received = recv(client_socket, buffer, sizeof(buffer), 0);
+
+    bool is_open;
+    if (bytes_received > 0) {
+        is_open = true;  
+    } else if (bytes_received == 0) {
+        is_open = false;  
+    } else {
+        if (errno == EWOULDBLOCK || errno == EAGAIN) {
+            is_open = true;  // No data, but socket is still open
+        } else {
+            std::cerr << "Socket error: " << strerror(errno) << std::endl;
+            is_open = false;
+        }
+    }
+
+    // Set the socket back to blocking mode
+    setBlocking(client_socket);
+
+    return is_open;
+}
+//send file queue to this socket
 void sendFileQueue(int clientSocket){
     std::string queue = "";
+    fileQueueMutex.lock();
     for(LUI i = 0; i < fileQueue.size(); i++) {
         std::string name = fileQueue[i];
         name = name.substr(name.find_last_of("/") + 1);
-        std::cout << "File: " << name << std::endl;
         queue += name + "\n";
     }
+    fileQueueMutex.unlock();
     ssize_t bytes_sent = send(clientSocket, queue.c_str(), queue.length(), 0);
     if(bytes_sent < 0) {
         std::cerr << "Error sending file queue" << std::endl;
     }
-    std::cout << "File queue sent: " << bytes_sent << std::endl;
 }
 void streamTracks();
 
@@ -143,8 +185,8 @@ void streamingClientHandler(int clientStreamingSocket){
 
 
 // Function to handle multiple clients and stream data
-void handleClient(int clientSocket, int clientStreamSocket) {
-    while(true){
+void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocket) {
+    while(running){
         char buffer[CHUNK_SIZE] ;
         char message[CHUNK_SIZE] ;
         bzero(buffer, CHUNK_SIZE);
@@ -198,6 +240,54 @@ void handleClient(int clientSocket, int clientStreamSocket) {
             std::thread(streamingClientHandler, clientStreamSocket).detach();
             
         }
+        if(strcmp(buffer, "QUEUECHANGE") == 0) {
+            char change[CHUNK_SIZE];
+            bzero(change, CHUNK_SIZE);
+            ssize_t bytes_sent_qc = send(clientSocket, "OK", 3, 0);
+            if(bytes_sent_qc < 0) {
+                std::cerr << "Handshake gone wrong" << std::endl;
+            }
+            ssize_t bytes_received_qc = recv(clientSocket, change, CHUNK_SIZE, 0);
+            if(bytes_received_qc < 0) {
+                std::cerr << "Error receiving data from client." << std::endl;
+            }
+            if(strcmp(change,"SKIP") == 0) {
+                fileLock.lock();
+                fileQueue.erase(fileQueue.begin());
+                fileLock.unlock();
+            }
+            if(strcmp(change,"DELETE") == 0) {
+                std::cout << "Client wants to delete file" << std::endl;
+                char file_del[CHUNK_SIZE];
+                bzero(file_del, CHUNK_SIZE);
+                ssize_t bytes_sent_del = send(clientSocket, "OK", 3, 0);
+                if(bytes_sent_del < 0) {
+                    std::cerr << "Handshake gone wrong" << std::endl;
+                }
+                ssize_t bytes_received_del = recv(clientSocket, file_del, CHUNK_SIZE, 0);
+                if(bytes_received_del < 0) {
+                    std::cerr << "Error receiving data from client." << std::endl;
+                }
+                std::cout << "Client wants to delete file: " << file_del << std::endl;
+                std::string file_name = file_del;
+                file_name = "./mp3files/" + file_name;
+                fileLock.lock();
+                std::vector<std::string>::iterator position = std::find(fileQueue.begin(), fileQueue.end(), file_name);
+                if (position != fileQueue.end()) // == fileQueue.end() means the element was not found
+                    fileQueue.erase(position);
+                fileLock.unlock();
+            }
+            if(strcmp(change,"SWAP") == 0) {
+                fileLock.lock();
+                std::string temp = fileQueue[0];
+                fileQueue[0] = fileQueue[1];
+                fileQueue[1] = temp;
+                fileLock.unlock();
+            }
+        }
+        if(strcmp(buffer, "QUEUE") == 0) {
+            sendFileQueue(clientSocket);
+        }
 
         if(strcmp(buffer, "END") == 0) {
             break;
@@ -205,8 +295,19 @@ void handleClient(int clientSocket, int clientStreamSocket) {
     }
     close(clientSocket);
     close(clientStreamSocket);
+    close(clientQueueSocket);
 }
-
+void queue_sender(int clientQueueSocket){
+    while(running){
+        if(!isSocketOpen(clientQueueSocket)){
+            std::cout << "Client queue disconnected." << std::endl;
+            break;
+        }
+        sendFileQueue(clientQueueSocket);
+        sleep(2);
+    }
+    close(clientQueueSocket);
+ }
   
 int main() {
     signal(SIGINT, signalHandler);
@@ -214,6 +315,7 @@ int main() {
 
     serverControlSocket = socket(AF_INET, SOCK_STREAM, 0);
     serverStreamSocket = socket(AF_INET, SOCK_STREAM, 0);
+    serverQueueSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (serverControlSocket < 0) {
         std::cerr << "Error creating control socket." << std::endl;
         return 1;
@@ -224,7 +326,12 @@ int main() {
         return 1;
     }
 
-    sockaddr_in serverControlAddr, serverStreamAddr;
+    if (serverQueueSocket < 0) {
+        std::cerr << "Error creating queue socket." << std::endl;
+        return 1;
+    }
+
+    sockaddr_in serverControlAddr, serverStreamAddr, serverQueueAddr;
     serverControlAddr.sin_family = AF_INET;
     serverControlAddr.sin_addr.s_addr = INADDR_ANY;
     serverControlAddr.sin_port = htons(CONTROL_PORT);
@@ -232,6 +339,10 @@ int main() {
     serverStreamAddr.sin_family = AF_INET;
     serverStreamAddr.sin_addr.s_addr = INADDR_ANY;
     serverStreamAddr.sin_port = htons(STREAM_PORT);
+
+    serverQueueAddr.sin_family = AF_INET;
+    serverQueueAddr.sin_addr.s_addr = INADDR_ANY;
+    serverQueueAddr.sin_port = htons(QUEUE_PORT);
     std::cout << "ELO" << std::endl;
     if (bind(serverControlSocket, (struct sockaddr*)&serverControlAddr, sizeof(serverControlAddr)) < 0) {
         std::cerr << "Bind failed." << std::endl;
@@ -244,32 +355,51 @@ int main() {
         close(serverStreamSocket);
         return 1;
     }
+    if (bind(serverQueueSocket, (struct sockaddr*)&serverQueueAddr, sizeof(serverQueueAddr)) < 0) {
+        std::cerr << "Bind failed." << std::endl;
+        close(serverControlSocket);
+        close(serverStreamSocket);
+        close(serverQueueSocket);
+        return 1;
+    }
     if (listen(serverControlSocket, 5) < 0) {
         std::cerr << "Listen failed." << std::endl;
         close(serverStreamSocket);
         close(serverControlSocket);
+        close(serverQueueSocket);
         return 1;
     }
     if (listen(serverStreamSocket, 5) < 0) {
         std::cerr << "Listen failed." << std::endl;
         close(serverStreamSocket);
         close(serverControlSocket);
+        close(serverQueueSocket);
+        return 1;
+    }
+    if (listen(serverQueueSocket, 5) < 0) {
+        std::cerr << "Listen failed." << std::endl;
+        close(serverStreamSocket);
+        close(serverControlSocket);
+        close(serverQueueSocket);
         return 1;
     }
 
     std::cout << "Server listening on port " << CONTROL_PORT << "..." << std::endl;
     std::cout << "Server streaming port " << STREAM_PORT << "..." << std::endl;
+    std::cout << "Server queue port " << QUEUE_PORT << "..." << std::endl;
     sockaddr_in clientAddr;
     socklen_t clientAddrLen = sizeof(clientAddr);
     sockaddr_in clientStrAddr;
     socklen_t clientStrAddrLen = sizeof(clientStrAddr);
+    sockaddr_in clientQueueAddr;
+    socklen_t clientQueueAddrLen = sizeof(clientQueueAddr);
 
     // Load MP3 files into queue
     std::cout << "Loading files to queue..." << std::endl;
     for (auto& file : std::filesystem::directory_iterator("./mp3files")) {
         fileQueue.push_back(file.path());
     }
-    sendFileQueue(serverControlSocket);
+    //iteracja przez pliki w osobnym wątku
     std::thread(streamTracks).detach();
 
     while (running) {
@@ -283,7 +413,11 @@ int main() {
             std::cerr << "Failed to accept client on streaming socket." << std::endl;
             continue;
         } 
-
+        int clientQueueSocket = accept(serverQueueSocket, (struct sockaddr*)&clientQueueAddr, &clientQueueAddrLen);
+        if (clientQueueSocket < 0) {
+            std::cerr << "Failed to accept client on queue socket." << std::endl;
+            continue;
+        }
         std::cout << "Client connected." << std::endl;
         std::cout << "Client IP: " << inet_ntoa(clientAddr.sin_addr) << std::endl;
         std::cout << "Client port: " << ntohs(clientAddr.sin_port) << std::endl;
@@ -291,10 +425,14 @@ int main() {
         std::cout << "Client streaming port: " << ntohs(clientStrAddr.sin_port) << std::endl;
 
         // Handle the client in a separate thread
-        std::thread(handleClient, clientSocket, clientStreamSocket).detach();
+        std::thread(handleClient, clientSocket, clientStreamSocket,clientQueueSocket).detach();
+        std::thread(queue_sender, clientQueueSocket).detach();
     }
 
     std::cout << "Server shutting down..." << std::endl;
+    std::cout << "Waiting 3s for threads to finish..." << std::endl;
+    sleep(3);
+    std::cout << "Server shutdown complete." << std::endl;
     return 0;
 }
 
@@ -314,6 +452,10 @@ void signalHandler(int signal) {
         }
         if (serverStreamSocket != -1) {
             close(serverStreamSocket);
+            std::cout << "Server socket closed.\n";
+        }
+        if(serverQueueSocket != -1){
+            close(serverQueueSocket);
             std::cout << "Server socket closed.\n";
         }
         
@@ -382,7 +524,6 @@ std::string get_name(int client_socket) {
 //iterates through the queue of files and iterates them by seconds
 void streamTracks(){
     std::cout << "Streaming thread started." << std::endl;
-    av_register_all();
     while(running) {
         std::cout << "Size of queue:" << fileQueue.size() << std::endl;
         if(fileQueue.size() > 0) {
@@ -414,6 +555,7 @@ void streamTracks(){
             fileLock.lock();
             streamedFile = filename;
             fileLock.unlock();
+            sleep(5);
             for(int i = 0; i < dur; i++){
                 momentLock.lock();
                 trackMoment = i;
@@ -422,10 +564,18 @@ void streamTracks(){
                 sleep(1);
             }
             fileQueue.erase(fileQueue.begin());
+            std::cout << "Track: " << filename << " finished." << std::endl;
+            std::cout << "Waiting 4s for next track." << std::endl;
+            momentLock.lock();
+            trackMoment = 0;
+            momentLock.unlock();
         }
         else{
             std::cout << "No files in queue." << std::endl;
-            sleep(3);
+            std::cout << "Loading files to queue again" << std::endl;
+        for (auto& file : std::filesystem::directory_iterator("./mp3files")) {
+            fileQueue.push_back(file.path());
+        }
         }
         
     }
