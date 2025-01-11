@@ -208,19 +208,29 @@ if __name__ == '__main__':
             
             elif action == 'QUEUECHANGE':
                 client_socket.send(action.encode('utf-8'))
-                handshake = client_socket.recv(MESSAGE_SIZE)
+                handshakeqc = client_socket.recv(MESSAGE_SIZE)
+                if(handshakeqc.decode('utf-8') != 'OK'):
+                    print("Error in queue change")
                 queue_change = input("Enter queue action: ")
-                if(queue_change == 'ADD'):
-                    fileName = input("Enter file name: ")
+                if(queue_change == 'SWAP'):
                     client_socket.send(queue_change.encode('utf-8'))
-                    client_socket.send(fileName.encode('utf-8'))
+                    handshakesw = client_socket.recv(MESSAGE_SIZE)
+                    swapIndex1 = input("Enter first track index: ")
+                    swapIndex2 = input("Enter second track index: ")
+                    indexes = swapIndex1 + ' ' + swapIndex2
+                    client_socket.send(indexes.encode('utf-8'))
+                    
                 elif(queue_change == 'DELETE'):
                     client_socket.send(queue_change.encode('utf-8'))
-                    handshake = client_socket.recv(MESSAGE_SIZE)
+                    handshakedel = client_socket.recv(MESSAGE_SIZE)
                     fileIndex = input("Enter track index: ")
                     fileIndex = int(fileIndex)
                     print(file_queue[fileIndex])
                     client_socket.send(file_queue[fileIndex].encode('utf-8'))
+                    
+                elif(queue_change == 'SKIP'):
+                    client_socket.send(queue_change.encode('utf-8'))
+
                 
 
             elif action == "QUEUE":

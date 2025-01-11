@@ -39,7 +39,7 @@ int serverControlSocket = -1;
 int serverStreamSocket = -1;
 int serverQueueSocket = -1;
 bool running = true;
-bool nosongs = false;
+bool skip = false;
 
 void signalHandler(int signal);
 
@@ -164,6 +164,7 @@ void sendMP3FileToClient(int clientStreamingSocket, const std::string& filename)
 void streamingClientHandler(int clientStreamingSocket){
     char message[CHUNK_SIZE];
     bzero(message, CHUNK_SIZE);
+    std::cout<<"Streaming client connected."<<std::endl;
     fileLock.lock();
     sendMP3FileToClient(clientStreamingSocket, streamedFile);
     fileLock.unlock();
@@ -251,9 +252,12 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
             if(bytes_received_qc < 0) {
                 std::cerr << "Error receiving data from client." << std::endl;
             }
+            std::cout << "Received: " << change << std::endl;
             if(strcmp(change,"SKIP") == 0) {
+                std::cout << "Client wants to skip file" << std::endl;
                 fileLock.lock();
                 fileQueue.erase(fileQueue.begin());
+                skip = true;
                 fileLock.unlock();
             }
             if(strcmp(change,"DELETE") == 0) {
@@ -273,18 +277,45 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
                 file_name = "./mp3files/" + file_name;
                 fileLock.lock();
                 std::vector<std::string>::iterator position = std::find(fileQueue.begin(), fileQueue.end(), file_name);
-                if (position != fileQueue.end()) // == fileQueue.end() means the element was not found
+                if (position != fileQueue.end()){
+                    if(*position == streamedFile){
+                        skip = true;
+                    }
                     fileQueue.erase(position);
+                }
                 fileLock.unlock();
             }
             if(strcmp(change,"SWAP") == 0) {
-                fileLock.lock();
-                std::string temp = fileQueue[0];
-                fileQueue[0] = fileQueue[1];
-                fileQueue[1] = temp;
-                fileLock.unlock();
+                std::cout << "Client wants to swap files" << std::endl;
+                char idx_swap[CHUNK_SIZE];
+                bzero(idx_swap, CHUNK_SIZE);
+                ssize_t bytes_sent_swap = send(clientSocket, "OK", 3, 0);
+                if(bytes_sent_swap < 0) {
+                    std::cerr << "Handshake gone wrong" << std::endl;
+                }
+                ssize_t bytes_received_swap = recv(clientSocket, idx_swap, CHUNK_SIZE, 0);
+                if(bytes_received_swap < 0) {
+                    std::cerr << "Error receiving data from client." << std::endl;
+                }
+                std::istringstream iss(idx_swap);
+                int idx1, idx2;
+                iss >> idx1 >> idx2;
+                std::cout << "Received indices: " << idx1 << ", " << idx2 << std::endl;
+                fileQueueMutex.lock();
+                if (idx1 >= 0 && idx1 < int(fileQueue.size()) && idx2 >= 0 && idx2 < int(fileQueue.size())) {
+                    std::swap(fileQueue[idx1], fileQueue[idx2]);
+                    // if(fileQueue[idx1] == streamedFile || fileQueue[idx2] == streamedFile){
+                    //     skip = true;
+                    // }
+                    std::cout << "Swapped files" << fileQueue[idx1] << " and " << fileQueue[idx2] << std::endl;
+                    std::cout << "Files swapped successfully!" << std::endl;
+                } else {
+                    std::cerr << "Invalid indices for swap!" << std::endl;
+                }
+                fileQueueMutex.unlock();
             }
         }
+
         if(strcmp(buffer, "QUEUE") == 0) {
             sendFileQueue(clientSocket);
         }
@@ -545,7 +576,6 @@ void streamTracks(){
             int dur;
             if (duration != AV_NOPTS_VALUE) {
                 durationInSeconds = duration / (double)AV_TIME_BASE;
-                std::cout << "Duration: " << durationInSeconds << " seconds" << std::endl;
             } else {
                 std::cerr << "Error: Could not determine duration." << std::endl;
                 continue;
@@ -555,15 +585,25 @@ void streamTracks(){
             fileLock.lock();
             streamedFile = filename;
             fileLock.unlock();
+            std::cout << "Streaming file: " << filename << std::endl;
             sleep(5);
             for(int i = 0; i < dur; i++){
+                // if(skip){
+                //     break;
+                // }
                 momentLock.lock();
                 trackMoment = i;
-                std::cout << "Track: " << filename << " Time: " << trackMoment << std::endl;
+                if(trackMoment%10 == 0){
+                    std::cout << "Track: " << filename << " Time: " << trackMoment << std::endl;
+                }
                 momentLock.unlock();
                 sleep(1);
             }
-            fileQueue.erase(fileQueue.begin());
+            if(!skip){
+                fileQueue.erase(fileQueue.begin());
+            }
+            skip = false;
+
             std::cout << "Track: " << filename << " finished." << std::endl;
             std::cout << "Waiting 4s for next track." << std::endl;
             momentLock.lock();
