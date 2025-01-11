@@ -4,7 +4,8 @@ sudo apt install libtag1-dev
 
 
 to do
-create server and client logic to actually communicate
+operations on queue - swap and skip
+interface client
 
 ## How to run
 1. type make in the terminal to compile project
