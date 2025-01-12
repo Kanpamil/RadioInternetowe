@@ -14,6 +14,7 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <algorithm>
+#include <atomic>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -32,14 +33,19 @@ std::vector<int> streamingSockets;
 std::mutex fileQueueMutex;
 std::mutex momentLock;
 std::mutex fileLock;
+std::mutex clientMutex;
 std::vector<std::string> fileQueue;
 std::string streamedFile;
 int trackMoment = 0;
+int numberOfClients = 0;
+std::atomic<int> clientsAcknowledged = 0;
 int serverControlSocket = -1;
 int serverStreamSocket = -1;
 int serverQueueSocket = -1;
 bool running = true;
 bool skip = false;
+bool is_queue_changing = false;
+bool clientSkip = false;
 
 void signalHandler(int signal);
 
@@ -242,6 +248,15 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
             
         }
         if(strcmp(buffer, "QUEUECHANGE") == 0) {
+            if(is_queue_changing){
+                std::cout << "Queue is already changing" << std::endl;
+                ssize_t bytes_sent_qc = send(clientSocket, "NIEOK", 3, 0);
+                if(bytes_sent_qc < 0) {
+                    std::cerr << "Handshake gone wrong" << std::endl;
+                }
+                continue;
+            }
+            is_queue_changing = true;
             char change[CHUNK_SIZE];
             bzero(change, CHUNK_SIZE);
             ssize_t bytes_sent_qc = send(clientSocket, "OK", 3, 0);
@@ -259,6 +274,7 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
                 fileQueue.erase(fileQueue.begin());
                 skip = true;
                 fileLock.unlock();
+                is_queue_changing = false;
             }
             if(strcmp(change,"DELETE") == 0) {
                 std::cout << "Client wants to delete file" << std::endl;
@@ -284,6 +300,7 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
                     fileQueue.erase(position);
                 }
                 fileLock.unlock();
+                is_queue_changing = false;
             }
             if(strcmp(change,"SWAP") == 0) {
                 std::cout << "Client wants to swap files" << std::endl;
@@ -304,15 +321,16 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
                 fileQueueMutex.lock();
                 if (idx1 >= 0 && idx1 < int(fileQueue.size()) && idx2 >= 0 && idx2 < int(fileQueue.size())) {
                     std::swap(fileQueue[idx1], fileQueue[idx2]);
-                    // if(fileQueue[idx1] == streamedFile || fileQueue[idx2] == streamedFile){
-                    //     skip = true;
-                    // }
+                    if(fileQueue[idx1] == streamedFile || fileQueue[idx2] == streamedFile){
+                        skip = true;
+                    }
                     std::cout << "Swapped files" << fileQueue[idx1] << " and " << fileQueue[idx2] << std::endl;
                     std::cout << "Files swapped successfully!" << std::endl;
                 } else {
                     std::cerr << "Invalid indices for swap!" << std::endl;
                 }
                 fileQueueMutex.unlock();
+                is_queue_changing = false;
             }
         }
 
@@ -327,15 +345,40 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
     close(clientSocket);
     close(clientStreamSocket);
     close(clientQueueSocket);
+    clientMutex.lock();
+    numberOfClients--;
+    clientMutex.unlock();
 }
-void queue_sender(int clientQueueSocket){
+void update_sender(int clientQueueSocket){
     while(running){
         if(!isSocketOpen(clientQueueSocket)){
             std::cout << "Client queue disconnected." << std::endl;
             break;
         }
-        sendFileQueue(clientQueueSocket);
-        sleep(2);
+        if(clientSkip){
+            ssize_t bytes_sent = send(clientQueueSocket, "SKIP", 6, 0);
+            if(bytes_sent < 0) {
+                std::cerr << "Error sending file queue" << std::endl;
+            }
+            else{
+                std::cout << "Skip message sent." << std::endl;
+                clientsAcknowledged++;
+            }
+
+            clientMutex.lock();
+            if(clientsAcknowledged == numberOfClients){
+                clientSkip = false;
+                clientsAcknowledged = 0;
+            }
+            clientMutex.unlock();
+
+            sleep(2);
+        }
+        else{
+            sendFileQueue(clientQueueSocket);
+            sleep(2);
+        }
+        
     }
     close(clientQueueSocket);
  }
@@ -449,6 +492,10 @@ int main() {
             std::cerr << "Failed to accept client on queue socket." << std::endl;
             continue;
         }
+        clientMutex.lock();
+        numberOfClients++;
+        std::cout << "Number of clients: " << numberOfClients << std::endl;
+        clientMutex.unlock();
         std::cout << "Client connected." << std::endl;
         std::cout << "Client IP: " << inet_ntoa(clientAddr.sin_addr) << std::endl;
         std::cout << "Client port: " << ntohs(clientAddr.sin_port) << std::endl;
@@ -457,7 +504,7 @@ int main() {
 
         // Handle the client in a separate thread
         std::thread(handleClient, clientSocket, clientStreamSocket,clientQueueSocket).detach();
-        std::thread(queue_sender, clientQueueSocket).detach();
+        std::thread(update_sender, clientQueueSocket).detach();
     }
 
     std::cout << "Server shutting down..." << std::endl;
@@ -588,9 +635,10 @@ void streamTracks(){
             std::cout << "Streaming file: " << filename << std::endl;
             sleep(5);
             for(int i = 0; i < dur; i++){
-                // if(skip){
-                //     break;
-                // }
+                if(skip){
+                    clientSkip = true;
+                    break;
+                }
                 momentLock.lock();
                 trackMoment = i;
                 if(trackMoment%10 == 0){
@@ -603,6 +651,7 @@ void streamTracks(){
                 fileQueue.erase(fileQueue.begin());
             }
             skip = false;
+
 
             std::cout << "Track: " << filename << " finished." << std::endl;
             std::cout << "Waiting 4s for next track." << std::endl;

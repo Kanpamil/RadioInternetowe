@@ -160,10 +160,16 @@ def send_mp3_file(file_path, client_socket):
         print(f"An error occurred: {e}")
 
 
-def queue_getter(client_queue_socket):
+def update_getter(client_queue_socket):
     global file_queue
     while(working):
-        file_queue = receive_file_queue(client_queue_socket)
+        
+        update = client_queue_socket.recv(MESSAGE_SIZE).decode('utf-8')
+        if(update[:4] == 'SKIP'):
+            print('Received skip')
+            stop_playing.set()
+        else:
+            file_queue = update.splitlines()
         time.sleep(2)
 
 
@@ -178,7 +184,7 @@ if __name__ == '__main__':
         print("Connected to server.")
         streaming_thread = threading.Thread(target=stream_song, args=(client_socket,client_streaming_socket))
         streaming_thread.start()
-        queue_thread = threading.Thread(target=queue_getter, args=(client_queue_socket,))
+        queue_thread = threading.Thread(target=update_getter, args=(client_queue_socket,))
         queue_thread.start()
         while(True):
             #get next song from server if streaming is on and song isnt playing
@@ -209,8 +215,11 @@ if __name__ == '__main__':
             elif action == 'QUEUECHANGE':
                 client_socket.send(action.encode('utf-8'))
                 handshakeqc = client_socket.recv(MESSAGE_SIZE)
-                if(handshakeqc.decode('utf-8') != 'OK'):
-                    print("Error in queue change")
+                print(handshakeqc.decode('utf-8'))
+                if(handshakeqc.decode('utf-8') == "NIE"):
+                    print("Queue is being changed by another user")
+
+                    continue
                 queue_change = input("Enter queue action: ")
                 if(queue_change == 'SWAP'):
                     client_socket.send(queue_change.encode('utf-8'))
