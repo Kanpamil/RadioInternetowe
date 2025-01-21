@@ -8,7 +8,7 @@ import simpleaudio as sa
 import io
 import os
 
-SERVER_HOST = 'localhost'
+SERVER_HOST = '192.168.0.11'
 SERVER_PORT = 1100
 SERVER_STREAMING_PORT = 1101
 SERVER_QUEUE_PORT = 1102
@@ -189,7 +189,7 @@ if __name__ == '__main__':
         while(True):
             #get next song from server if streaming is on and song isnt playing
             
-            action = input("Action: 'FILE'/'STREAM/'HELLO'/'QUEUE'/'STOP'/'END': ")
+            action = input("Action: 'FILE'/'STREAM/'HELLO'/'QUEUE'/'QUEUCHANGE'/'STOP'/'END': ")
             if action == 'FILE':
                 client_socket.send(action.encode('utf-8'))
                 fileName = input("Enter file name: ")
@@ -220,7 +220,7 @@ if __name__ == '__main__':
                     print("Queue is being changed by another user")
 
                     continue
-                queue_change = input("Enter queue action: ")
+                queue_change = input("Enter queue action('SWAP'/'DELETE'/'SKIP'): ")
                 if(queue_change == 'SWAP'):
                     client_socket.send(queue_change.encode('utf-8'))
                     handshakesw = client_socket.recv(MESSAGE_SIZE)
