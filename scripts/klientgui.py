@@ -28,68 +28,27 @@ working = True
 current_song = ""
 action = None  # To store the current action selected by a button
 
-def set_action(new_action):
-    global action
-    if action is None:  # Only change if action is None
-        action = new_action
-    else:
-        messagebox.showinfo("Action Pending", "Please wait for the current action to complete.")
-def receive_file_queue(client_socket):
-    try:
-        # Receive the file queue as a single string
-        data = client_socket.recv(CHUNK_SIZE).decode('utf-8')
-        
-        # Split the received data by newlines to get individual track names
-        track_list = data.splitlines()
-        
-        # Return the list of tracks
-        return track_list
-    except UnicodeDecodeError as e:
-        print(f"Decoding error: {e}")
-        return []  # Return an empty list in case of error
 
 
-
-def receive_metadata(client_socket):
-    print("Receiving metadata...")
-    try:
-        data = client_socket.recv(CHUNK_SIZE).decode('utf-8')
-    except UnicodeDecodeError as e:
-        print(f"Decoding error: {e}")
-        data = None
-    return data
-
-def clear_socket_buffer(client_socket):
-    """Clear any leftover data in the socket buffer."""
-    try:
-        client_socket.settimeout(1)  # Set a timeout of 1 second (adjust as necessary)
-        while True:
-            data = client_socket.recv(1024)  # Try to read data from the socket
-            if not data:
-                break  # Break when no more data is available
-    except socket.timeout:
-        pass  # Timeout reached, no more data to read
-    finally:
-        client_socket.settimeout(None)  # Reset the timeout back to blocking mode
-
+#Function for receiving mp3 file and returning audio segment to play
 def receiveMP3File(client_streaming_socket):
     try:
         print("elo")
-        audio_buffer = io.BytesIO()  # Create an in-memory buffer
+        audio_buffer = io.BytesIO()  # buffer with audio data
 
-        file_size = client_streaming_socket.recv(MESSAGE_SIZE)# Get the file size
+        file_size = client_streaming_socket.recv(MESSAGE_SIZE)  # Receive the file size
         print(file_size)
         file_size = file_size.decode('utf-8')
         print(file_size)
         file_size = int(file_size)
         print(f"Receiving MP3 file of size {file_size} bytes...")
         client_streaming_socket.send("OK".encode('utf-8'))
-        print("sent acknowledgment after filesize")  # Acknowledge the file size
+        print("sent acknowledgment after filesize")
         received_size = 0
+        #loop to receive file in chunks
         while received_size < file_size:
             if received_size == 0:
                 print("Receiving first chunk")
-            # Receive data in chunks
             chunk = client_streaming_socket.recv(CHUNK_SIZE)
             if not chunk:
                 break
@@ -103,15 +62,12 @@ def receiveMP3File(client_streaming_socket):
         print("sent acknowledgment after receiving file")
         audio_buffer.seek(0)
         audio_segment = AudioSegment.from_file(audio_buffer, format="mp3")
-        del audio_buffer  # Delete the buffer to free up memory
-        del file_size
-        del received_size
         return audio_segment
 
     except Exception as e:
         print(f"Error receiving MP3 file: {e}")
 
-#play file in thread
+#play file in thread(background)
 def play_file(filename, start_time):
     global playing
     pygame.mixer.init()
@@ -127,18 +83,19 @@ def play_file(filename, start_time):
             break
         time.sleep(1)
     playing = False
-#check for streaming in thread
+
+#Thread for handling the streaming
 def stream_song(client_socket, client_streaming_socket):
     global working
     global playing
     global streaming
     while(working == True):
+        #if client wants to stream and song is not playing
         if streaming == True and playing == False:
             client_socket.send('STREAM'.encode('utf-8'))
             audio_Segment = receiveMP3File(client_streaming_socket)
             tracktime = client_streaming_socket.recv(MESSAGE_SIZE)
             tracktime = int(tracktime.decode('utf-8'))
-            clear_socket_buffer(client_streaming_socket)
             print(f"Start from {tracktime} seconds")
             stop_playing.clear()
             playing_thread = threading.Thread(target=play_file, args=(audio_Segment.export(format='mp3'), tracktime))
@@ -146,18 +103,21 @@ def stream_song(client_socket, client_streaming_socket):
             playing = True
             del tracktime
             del audio_Segment
+        #if client wants to stop streaming and song is playing
         elif streaming == False and playing == True:
             stop_playing.set()
             playing_thread.join()
             playing = False
+        #when everything is right
         else:
             time.sleep(1)
+    #if the client wants to end, stop playing and close the thread
     if playing:
         stop_playing.set()
         playing_thread.join()
         playing = False
 
-
+#function for uploading file to server
 def send_mp3_file(file_path, client_socket):
     try:
         file_size = os.path.getsize(file_path)  # Get the size of the file
@@ -173,7 +133,7 @@ def send_mp3_file(file_path, client_socket):
     except Exception as e:
         print(f"An error occurred: {e}")
 
-
+#function for continous updates of queue or skips
 def update_getter(client_queue_socket):
     global file_queue
     while(working):
@@ -186,9 +146,21 @@ def update_getter(client_queue_socket):
             file_queue = update.splitlines()
         time.sleep(2)
 
+#function for setting action - it checks if there is any action pending
+def set_action(new_action):
+    global action
+    if action is None:  # Only change if action is None
+        action = new_action
+    else:
+        messagebox.showinfo("Action Pending", "Please wait for the current action to complete.")
+
+#function handling queue change after press of a button
 def handle_queue_change(client_socket):
     global file_queue
-    print(action)
+    global action
+
+    #functions handling queue change
+    #action will be set to None after execution or canceling the queue_change
     def perform_swap():
         global action
         swap_index1 = simpledialog.askinteger("Swap", "Enter first track index:")
@@ -200,7 +172,6 @@ def handle_queue_change(client_socket):
             indexes = f"{swap_index1} {swap_index2}"
             client_socket.send(indexes.encode('utf-8'))
             messagebox.showinfo("Success", "Tracks swapped successfully!")
-        action = None
         close_queue_change_buttons()
 
     def perform_delete():
@@ -212,7 +183,6 @@ def handle_queue_change(client_socket):
             client_socket.recv(MESSAGE_SIZE)  # Handshake
             client_socket.send(file_queue[file_index].encode('utf-8'))
             messagebox.showinfo("Success", f"Track {file_queue[file_index]} deleted successfully!")
-        action = None
         close_queue_change_buttons()
 
     def perform_skip():
@@ -220,8 +190,8 @@ def handle_queue_change(client_socket):
         client_socket.send("SKIP".encode('utf-8'))
         messagebox.showinfo("Success", "Track skipped!")
         close_queue_change_buttons()
-        action = None
-
+    
+    #function for closing queue change buttons
     def close_queue_change_buttons():
         global action 
         client_socket.send("NEVERMIND".encode('utf-8'))
@@ -230,12 +200,14 @@ def handle_queue_change(client_socket):
         queue_change_frame.pack_forget()
         action = None
 
-    # Request queue change from the server
+    #sending queuechange intention
     client_socket.send("QUEUECHANGE".encode('utf-8'))
     handshakeqc = client_socket.recv(MESSAGE_SIZE).decode('utf-8')
 
+    #if someone else is changing queue
     if handshakeqc == "NIE":
         messagebox.showerror("Error", "Queue is being changed by another user")
+        action = None
         return
 
     # Create buttons for SWAP, DELETE, and SKIP
@@ -248,6 +220,7 @@ def handle_queue_change(client_socket):
     tk.Button(queue_change_frame, text="Skip Track", command=perform_skip).pack(pady=5)
     tk.Button(queue_change_frame, text="Cancel", command=close_queue_change_buttons).pack(pady=10)
 
+#thread function for handling actions
 def handle_action(client_socket, client_streaming_socket, client_queue_socket):
     global action, streaming, working
 
@@ -311,8 +284,9 @@ def handle_action(client_socket, client_streaming_socket, client_queue_socket):
         else:
             # Wait for next action
             threading.Event().wait(0.5)
+
+#updating queue in GUI
 def update_queue_display():
-    """Update the Listbox with the current queue"""
     queue_listbox.delete(0, tk.END)  # Clear the current listbox items
     for track in file_queue:
         queue_listbox.insert(tk.END, track)  # Insert each track into the listbox
@@ -322,10 +296,13 @@ def update_queue_display():
 if __name__ == '__main__':
     try:
         # Setup sockets
+        #control socket
         client_socket = socket.socket()
         client_socket.connect((SERVER_HOST, SERVER_PORT))
+        #socket for streaming - getting files
         client_streaming_socket = socket.socket()
         client_streaming_socket.connect((SERVER_HOST, SERVER_STREAMING_PORT))
+        #socket for updates
         client_queue_socket = socket.socket()
         client_queue_socket.connect((SERVER_HOST, SERVER_QUEUE_PORT))
 
@@ -340,7 +317,7 @@ if __name__ == '__main__':
         root = tk.Tk()
         root.title("Music Streaming Client")
 
-        # Action buttons
+        #action buttons
         tk.Button(root, text="Upload File", command=lambda: set_action('FILE')).pack(pady=5)
         tk.Button(root, text="Start Streaming", command=lambda: set_action('STREAM')).pack(pady=5)
         tk.Button(root, text="Stop Streaming", command=lambda: set_action('STOP')).pack(pady=5)

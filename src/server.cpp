@@ -42,131 +42,22 @@ std::atomic<int> clientsAcknowledged = 0;
 int serverControlSocket = -1;
 int serverStreamSocket = -1;
 int serverQueueSocket = -1;
-bool running = true;
-bool skip = false;
-bool is_queue_changing = false;
-bool clientSkip = false;
+bool running = true; // Flag to stop the server loop
+bool skip = false; // Flag to skip the current track
+bool is_queue_changing = false; // Flag to check if the queue is being changed by a client
+bool clientSkip = false; // Flag to send skip message to clients
 
 void signalHandler(int signal);
-
 
 void save_file(const std::string& file_name, const char* data, size_t size);
 
 void get_file(int client_socket, std::string file_name);
 
-std::string get_name(int client_socket);
-
-//Functions to check for client disconnection
-void setNonBlocking(int socket_fd) {
-    int flags = fcntl(socket_fd, F_GETFL, 0);
-    fcntl(socket_fd, F_SETFL, flags | O_NONBLOCK);
-}
-
-void setBlocking(int socket_fd) {
-    int flags = fcntl(socket_fd, F_GETFL, 0);
-    fcntl(socket_fd, F_SETFL, flags & ~O_NONBLOCK);
-}
-
-bool isSocketOpen(int client_socket) {
-    setNonBlocking(client_socket);
-
-    char buffer[1];
-    int bytes_received = recv(client_socket, buffer, sizeof(buffer), 0);
-
-    bool is_open;
-    if (bytes_received > 0) {
-        is_open = true;  
-    } else if (bytes_received == 0) {
-        is_open = false;  
-    } else {
-        if (errno == EWOULDBLOCK || errno == EAGAIN) {
-            is_open = true;  // No data, but socket is still open
-        } else {
-            std::cerr << "Socket error: " << strerror(errno) << std::endl;
-            is_open = false;
-        }
-    }
-
-    // Set the socket back to blocking mode
-    setBlocking(client_socket);
-
-    return is_open;
-}
-//send file queue to this socket
-void sendFileQueue(int clientSocket){
-    std::string queue = "";
-    fileQueueMutex.lock();
-    for(LUI i = 0; i < fileQueue.size(); i++) {
-        std::string name = fileQueue[i];
-        name = name.substr(name.find_last_of("/") + 1);
-        queue += name + "\n";
-    }
-    fileQueueMutex.unlock();
-    ssize_t bytes_sent = send(clientSocket, queue.c_str(), queue.length(), 0);
-    if(bytes_sent < 0) {
-        std::cerr << "Error sending file queue" << std::endl;
-    }
-}
 void streamTracks();
 
-// Function to stream MP3 data to a client
-void sendMP3FileToClient(int clientStreamingSocket, const std::string& filename) {
-    char message[CHUNK_SIZE]; // Buffer for messages
-    bzero(message,CHUNK_SIZE);
-    std::ifstream file(filename, std::ios::binary); // Open the file in binary mode
-    
-    if (!file.is_open()) {
-        std::cerr << "Failed to open file: " << filename << std::endl;
-        return;
-    }
-    file.seekg(0, std::ios::end);  // Move to the end
-    std::streamsize fileSize = 0;
-    fileSize = file.tellg();  // Get file size
-    file.seekg(0, std::ios::beg);  // Return to the beginning
-    // Send the file size to the client
-    std::string size = std::to_string(fileSize);
-    std::cout << "Size of file: "<< size << std::endl; 
-    ssize_t bytes_sent = send(clientStreamingSocket, size.c_str(), size.length(), 0);
-    if (bytes_sent < 0) {
-        std::cerr << "Error sending file size to client." << std::endl;
-        return;
-    }
-    else{
-        std::cout << "File size sent to client." << std::endl;
-    }
-    // Wait for client to acknowledge the file size
-    ssize_t bytes_message = recv(clientStreamingSocket, message, CHUNK_SIZE, 0);
-    if (bytes_message < 0) {
-        std::cerr << "Error getting data from client." << std::endl;
-    }
-    std::cout << message << std::endl;
-    if (strcmp(message, "OK") != 0) {
-        std::cerr << "Client did not acknowledge file size." << std::endl;
-        return;
-    }
-    else{
-        std::cout << "Client acknowledged file size." << std::endl;
-    }
-    
-    // Read file in chunks and send to client
-    char buffer[CHUNK_SIZE];
-    bzero(buffer, CHUNK_SIZE);
-    sleep(1);
-    std::cout << "Sending file to client..." << std::endl;
-    while (file.read(buffer, sizeof(buffer)) || file.gcount() > 0) {
-        ssize_t bytesSent = send(clientStreamingSocket, buffer, file.gcount(), 0);
-        if (bytesSent < 0) {
-            std::cerr << "Error sending data to client." << std::endl;
-            break;
-        }
-    }
+void sendMP3FileToClient(int clientStreamingSocket, const std::string& filename);
 
-    // Close the file and notify the client of completion
-    size.clear();
-    file.close();
-    std::cout << "File " << filename << " sent successfully." << std::endl;
-}
-
+//function to handle file streaming - just file sending and tracktime
 void streamingClientHandler(int clientStreamingSocket){
     char message[CHUNK_SIZE];
     bzero(message, CHUNK_SIZE);
@@ -191,15 +82,15 @@ void streamingClientHandler(int clientStreamingSocket){
 }
 
 
-// Function to handle multiple clients and stream data
+//function handling client commands
 void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocket) {
     while(running){
-        std::cout << "Receiving from client..." << std::endl;
-        char buffer[CHUNK_SIZE] ;
-        char message[CHUNK_SIZE] ;
+        char buffer[CHUNK_SIZE] ;//buffer for commands
+        char message[CHUNK_SIZE] ;//buffer for messages
         bzero(buffer, CHUNK_SIZE);
         bzero(message, CHUNK_SIZE);
-        // Receive commands from the client
+
+        //receive command
         ssize_t bytes_received = recv(clientSocket, buffer, CHUNK_SIZE, 0);
         if(bytes_received < 0) {
             std::cerr << "Error receiving data from client." << std::endl;
@@ -210,6 +101,7 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
         }
         std::cout << "Received: " << buffer << std::endl;
 
+        //Hello for testing
         if(strcmp(buffer, "HELLO") == 0) {
             
             std::cout << "Client says hello" << std::endl;
@@ -222,39 +114,51 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
                 std::cerr << "Error getting data from client." << std::endl;
             }
         }
+
         //File transfer from client to server
         if(strcmp(buffer, "FILE") == 0) {
             ssize_t bytes_sent_file = send(clientSocket, "OK ", 3, 0);
             if(bytes_sent_file < 0) {
-                std::cerr << "Handshake gone wrong" << std::endl;
+                std::cerr << "Handshake in file upload gone wrong" << std::endl;
             }
+            //getting file name
             std::string file_name;
             file_name.clear();
-            file_name = get_name(clientSocket);
-
+            char buffer[CHUNK_SIZE];
+            bzero(buffer, CHUNK_SIZE);
+            ssize_t bytes_received = recv(clientSocket, buffer, CHUNK_SIZE, 0);
+            if(bytes_received < 0) {
+                std::cerr << "Error receiving file name from client." << std::endl;
+            }
+            file_name = std::string(buffer);
             if(file_name.empty() || file_name == "invalid") {
                 std::cerr << "Invalid file name received." << std::endl;
                 continue;
             }
 
             std::cout << "Client wants to send file: " << file_name << std::endl;
-            
+            //sending OK to client - he can start sending file
             ssize_t bytes_sent = send(clientSocket, "OK ", 3, 0);
             if(bytes_sent < 0) {
                 std::cerr << "Handshake gone wrong" << std::endl;
             }
             std::cout << "Handshake sent" << std::endl;
+            //getting file from client
             get_file(clientSocket,file_name);
         }
         //Streaming from server to client
         if(strcmp(buffer, "STREAM") == 0) {
             std::cout << "Client wants to stream" << std::endl;
+            //create thread for streaming
             std::thread(streamingClientHandler, clientStreamSocket).detach();
             
         }
+        //Queue handling
         if(strcmp(buffer, "QUEUECHANGE") == 0) {
+            //check if queue is already being changed by other client
             if(is_queue_changing){
                 std::cout << "Queue is already changing" << std::endl;
+                //tell client that queue is changing
                 ssize_t bytes_sent_qc = send(clientSocket, "NIEOK", 3, 0);
                 if(bytes_sent_qc < 0) {
                     std::cerr << "Handshake gone wrong" << std::endl;
@@ -264,15 +168,19 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
             is_queue_changing = true;
             char change[CHUNK_SIZE];
             bzero(change, CHUNK_SIZE);
+            //send handshake
             ssize_t bytes_sent_qc = send(clientSocket, "OK", 3, 0);
             if(bytes_sent_qc < 0) {
                 std::cerr << "Handshake gone wrong" << std::endl;
             }
+            //receive type of change
             ssize_t bytes_received_qc = recv(clientSocket, change, CHUNK_SIZE, 0);
             if(bytes_received_qc < 0) {
                 std::cerr << "Error receiving data from client." << std::endl;
             }
             std::cout << "Received: " << change << std::endl;
+
+            //skip current song
             if(strcmp(change,"SKIP") == 0) {
                 std::cout << "Client wants to skip file" << std::endl;
                 fileLock.lock();
@@ -281,6 +189,7 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
                 fileLock.unlock();
                 is_queue_changing = false;
             }
+            //delete file from queue
             else if(strcmp(change,"DELETE") == 0) {
                 std::cout << "Client wants to delete file" << std::endl;
                 char file_del[CHUNK_SIZE];
@@ -289,10 +198,12 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
                 if(bytes_sent_del < 0) {
                     std::cerr << "Handshake gone wrong" << std::endl;
                 }
+                //receive the name of file to delete
                 ssize_t bytes_received_del = recv(clientSocket, file_del, CHUNK_SIZE, 0);
                 if(bytes_received_del < 0) {
                     std::cerr << "Error receiving data from client." << std::endl;
                 }
+
                 std::cout << "Client wants to delete file: " << file_del << std::endl;
                 std::string file_name = file_del;
                 file_name = "./mp3files/" + file_name;
@@ -311,22 +222,27 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
                 fileLock.unlock();
                 is_queue_changing = false;
             }
+            //swap files in queue
             else if(strcmp(change,"SWAP") == 0) {
                 std::cout << "Client wants to swap files" << std::endl;
                 char idx_swap[CHUNK_SIZE];
                 bzero(idx_swap, CHUNK_SIZE);
+                //send handshake
                 ssize_t bytes_sent_swap = send(clientSocket, "OK", 3, 0);
                 if(bytes_sent_swap < 0) {
                     std::cerr << "Handshake gone wrong" << std::endl;
                 }
+                //receive indices of files to swap
                 ssize_t bytes_received_swap = recv(clientSocket, idx_swap, CHUNK_SIZE, 0);
                 if(bytes_received_swap < 0) {
                     std::cerr << "Error receiving data from client." << std::endl;
                 }
-                std::istringstream iss(idx_swap);
+                std::string idx_swap_str = idx_swap;
+                std::istringstream iss(idx_swap_str);//treat the string as stream to get indices
                 int idx1, idx2;
                 iss >> idx1 >> idx2;
                 std::cout << "Received indices: " << idx1 << ", " << idx2 << std::endl;
+                //check if indices are valid and swap filenames in queue
                 fileQueueMutex.lock();
                 if (idx1 >= 0 && idx1 < int(fileQueue.size()) && idx2 >= 0 && idx2 < int(fileQueue.size())) {
                     std::swap(fileQueue[idx1], fileQueue[idx2]);
@@ -337,7 +253,6 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
                     std::cout << "Files swapped successfully!" << std::endl;
                 } else {
                     std::cerr << "Invalid indices for swap!" << std::endl;
-                    is_queue_changing= false;
                 }
                 is_queue_changing = false;
                 fileQueueMutex.unlock();
@@ -347,11 +262,7 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
                 is_queue_changing = false;
             }
         }
-
-        if(strcmp(buffer, "QUEUE") == 0) {
-            sendFileQueue(clientSocket);
-        }
-
+        //break the loop if client sends END
         if(strcmp(buffer, "END") == 0) {
             break;
         }
@@ -365,14 +276,12 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
 }
 void update_sender(int clientQueueSocket){
     while(running){
-        if(!isSocketOpen(clientQueueSocket)){
-            std::cout << "Client queue disconnected." << std::endl;
-            break;
-        }
+        //if the clients have to receive skip message
         if(clientSkip){
             ssize_t bytes_sent = send(clientQueueSocket, "SKIP", 6, 0);
             if(bytes_sent < 0) {
-                std::cerr << "Error sending file queue" << std::endl;
+                std::cerr << "Error sending skip message" << std::endl;
+                break;
             }
             else{
                 std::cout << "Skip message sent." << std::endl;
@@ -388,8 +297,21 @@ void update_sender(int clientQueueSocket){
 
             sleep(2);
         }
+        //otherwise send queue continously
         else{
-            sendFileQueue(clientQueueSocket);
+            std::string queue = "";
+            fileQueueMutex.lock();
+            for(LUI i = 0; i < fileQueue.size(); i++) {
+                std::string name = fileQueue[i];
+                name = name.substr(name.find_last_of("/") + 1);
+                queue += name + "\n";
+            }
+            fileQueueMutex.unlock();
+            ssize_t bytes_sent = send(clientQueueSocket, queue.c_str(), queue.length(), 0);
+            if(bytes_sent < 0) {
+                std::cerr << "Error sending file queue" << std::endl;
+                break;
+            }
             sleep(2);
         }
         
@@ -556,24 +478,86 @@ void signalHandler(int signal) {
     }
 }
 
+//function sending MP3 file to client used in streaming
+void sendMP3FileToClient(int clientStreamingSocket, const std::string& filename) {
+    char message[CHUNK_SIZE]; // Buffer for messages
+    bzero(message,CHUNK_SIZE);
+    std::ifstream file(filename, std::ios::binary);//open file in binary since it is audio file
+    
+    if (!file.is_open()) {
+        std::cerr << "Failed to open file: " << filename << std::endl;
+        return;
+    }
+    //get filesize
+    file.seekg(0, std::ios::end);  
+    std::streamsize fileSize = 0;
+    fileSize = file.tellg();  
+    file.seekg(0, std::ios::beg);
+    // Send the file size to the client
+    std::string size = std::to_string(fileSize);
+    std::cout << "Size of file: "<< size << std::endl; 
+    ssize_t bytes_sent = send(clientStreamingSocket, size.c_str(), size.length(), 0);
+    if (bytes_sent < 0) {
+        std::cerr << "Error sending file size to client." << std::endl;
+        return;
+    }
+    else{
+        std::cout << "File size sent to client." << std::endl;
+    }
+    // Wait for client to acknowledge the file size
+    ssize_t bytes_message = recv(clientStreamingSocket, message, CHUNK_SIZE, 0);
+    if (bytes_message < 0) {
+        std::cerr << "Error getting data from client." << std::endl;
+    }
+
+    //check if client acknowledged the file size
+    if (strcmp(message, "OK") != 0) {
+        std::cerr << "Client did not acknowledge file size." << std::endl;
+        return;
+    }
+    else{
+        std::cout << "Client acknowledged file size." << std::endl;
+    }
+    
+    // send the file to the client
+    char buffer[CHUNK_SIZE];
+    bzero(buffer, CHUNK_SIZE);
+    sleep(1);
+    std::cout << "Sending file to client..." << std::endl;
+    while (file.read(buffer, sizeof(buffer)) || file.gcount() > 0) {
+        ssize_t bytesSent = send(clientStreamingSocket, buffer, file.gcount(), 0);
+        if (bytesSent < 0) {
+            std::cerr << "Error sending data to client." << std::endl;
+            break;
+        }
+    }
+
+    // close the file and clear the size buffer
+    file.close();
+    std::cout << "File " << filename << " sent successfully." << std::endl;
+}
+
 //saves the file from the client
 void save_file(const std::string& file_name, const char* data, size_t size) {
-    std::ofstream file(file_name, std::ios::binary);
+    std::ofstream file(file_name, std::ios::binary);// binary mode since its audio file
     file.write(data, size);
     file.close();
 }
 
-//gets the file from the client
+//gets the file from the client and saves it in dedicated directory
 void get_file(int client_socket, std::string file_name) {
-    // Receive the file size
+    // receive the file size
     char size_buffer[CHUNK_SIZE];
+    bzero(size_buffer, CHUNK_SIZE);
     ssize_t size_bytes = recv(client_socket, size_buffer, CHUNK_SIZE, 0);
     if (size_bytes <= 0) {
         std::cerr << "Failed to receive file size." << std::endl;
         return;
     }
-    size_buffer[size_bytes] = '\0';  // Null-terminate the string
-    size_t file_size = std::stoul(size_buffer);
+    //convert it to size_t
+    std::string size_str(size_buffer, size_bytes);
+    size_t file_size = std::stoul(size_str);
+
     send(client_socket, "SIZE_OK", 7, 0);  // Acknowledge file size
 
     size_t total_bytes_received = 0;
@@ -581,7 +565,7 @@ void get_file(int client_socket, std::string file_name) {
     std::string file_data;
     file_data.clear();
 
-    // Receive the file in chunks until the total size is reached
+    // receive the file data loop
     while (total_bytes_received < file_size) {
         ssize_t bytes_received = recv(client_socket, buffer, CHUNK_SIZE, 0);
         if (bytes_received <= 0) {
@@ -593,33 +577,29 @@ void get_file(int client_socket, std::string file_name) {
     std::cout << "Received file, total bytes: " << total_bytes_received << std::endl;
 
     if (total_bytes_received != file_size) {
-    std::cerr << "File transfer incomplete: expected " << file_size 
-              << " bytes but received " << total_bytes_received << " bytes." << std::endl;
-    return;
+        std::cerr << "File transfer incomplete" << file_size << " bytes wanted but received " << total_bytes_received << " bytes." << std::endl;
+        return;
     }
-
+    //save the file in dedicated directory
     file_name = "mp3files/" + file_name;
     fileQueue.push_back(file_name);
     save_file(file_name, file_data.c_str(), file_data.size());
 }
-//gets name of the file from the client
-std::string get_name(int client_socket) {
-    char buffer[CHUNK_SIZE];
-    bzero(buffer, CHUNK_SIZE);
-    ssize_t bytes_received = recv(client_socket, buffer, CHUNK_SIZE, 0);
-    if(bytes_received < 0) {
-        std::cerr << "Error receiving data from client." << std::endl;
-        return "invalid";
-    }
-    return std::string(buffer);
-}
+
+
 //iterates through the queue of files and iterates them by seconds
 void streamTracks(){
     std::cout << "Streaming thread started." << std::endl;
     while(running) {
         std::cout << "Size of queue:" << fileQueue.size() << std::endl;
+        //if there are files in queue
         if(fileQueue.size() > 0) {
+            //segment for getting the duration of the file
             std::string filename = fileQueue.front();
+            //set the file to be streamed so the streaming thread can send it
+            fileLock.lock();
+            streamedFile = filename;
+            fileLock.unlock();
             AVFormatContext* formatContext = nullptr;
             if (avformat_open_input(&formatContext, filename.c_str(), nullptr, nullptr) != 0) {
                 std::cerr << "Error: Could not open file " << filename << std::endl;
@@ -643,12 +623,11 @@ void streamTracks(){
             }
             dur = int(durationInSeconds);
             std::cout << "Duration: " << dur << " seconds" << std::endl;
-            fileLock.lock();
-            streamedFile = filename;
-            fileLock.unlock();
             std::cout << "Streaming file: " << filename << std::endl;
-            sleep(5);
+            sleep(5);//wait 5s because of the clients delay
+            //iterate through all seconds of the file
             for(int i = 0; i < dur; i++){
+                //if the file needs to be skipped stop iterating
                 if(skip){
                     clientSkip = true;
                     break;
@@ -661,6 +640,7 @@ void streamTracks(){
                 momentLock.unlock();
                 sleep(1);
             }
+            //if the file ended on its own erase it - when the skip flag is set it is erased in the client command
             if(!skip){
                 fileQueue.erase(fileQueue.begin());
             }
@@ -668,17 +648,16 @@ void streamTracks(){
 
 
             std::cout << "Track: " << filename << " finished." << std::endl;
-            std::cout << "Waiting 4s for next track." << std::endl;
             momentLock.lock();
             trackMoment = 0;
             momentLock.unlock();
         }
-        else{
+        else{//if all the songs were streamed load them again
             std::cout << "No files in queue." << std::endl;
             std::cout << "Loading files to queue again" << std::endl;
-        for (auto& file : std::filesystem::directory_iterator("./mp3files")) {
-            fileQueue.push_back(file.path());
-        }
+            for (auto& file : std::filesystem::directory_iterator("./mp3files")) {
+                fileQueue.push_back(file.path());
+            }
         }
         
     }

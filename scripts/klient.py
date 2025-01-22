@@ -143,7 +143,7 @@ def stream_song(client_socket, client_streaming_socket):
         playing_thread.join()
         playing = False
 
-
+#function used to upload files to server
 def send_mp3_file(file_path, client_socket):
     try:
         file_size = os.path.getsize(file_path)  # Get the size of the file
@@ -159,7 +159,7 @@ def send_mp3_file(file_path, client_socket):
     except Exception as e:
         print(f"An error occurred: {e}")
 
-
+#continous check for queue changes or skips
 def update_getter(client_queue_socket):
     global file_queue
     while(working):
@@ -190,6 +190,7 @@ if __name__ == '__main__':
             #get next song from server if streaming is on and song isnt playing
             
             action = input("Action: 'FILE'/'STREAM/'HELLO'/'QUEUE'/'QUEUCHANGE'/'STOP'/'END': ")
+            #handling file upload
             if action == 'FILE':
                 client_socket.send(action.encode('utf-8'))
                 fileName = input("Enter file name: ")
@@ -198,20 +199,20 @@ if __name__ == '__main__':
                 handshake = client_socket.recv(MESSAGE_SIZE)
                 print(handshake.decode('utf-8'))
                 send_mp3_file('../mp3all/'+fileName, client_socket)
-
+            #setting streaming on
             elif action == 'STREAM': 
                 if streaming:
                     print("Already streaming")
                     continue
                 streaming = True
-
+            #setting streaming off
             elif action == 'STOP':
                 if streaming:
                     streaming = False
                     print("Streaming stopped")
                 else:
                     print("Not streaming")
-            
+            #handling intention of changing queue
             elif action == 'QUEUECHANGE':
                 client_socket.send(action.encode('utf-8'))
                 handshakeqc = client_socket.recv(MESSAGE_SIZE)
