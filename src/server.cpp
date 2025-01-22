@@ -194,6 +194,7 @@ void streamingClientHandler(int clientStreamingSocket){
 // Function to handle multiple clients and stream data
 void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocket) {
     while(running){
+        std::cout << "Receiving from client..." << std::endl;
         char buffer[CHUNK_SIZE] ;
         char message[CHUNK_SIZE] ;
         bzero(buffer, CHUNK_SIZE);
@@ -223,6 +224,10 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
         }
         //File transfer from client to server
         if(strcmp(buffer, "FILE") == 0) {
+            ssize_t bytes_sent_file = send(clientSocket, "OK ", 3, 0);
+            if(bytes_sent_file < 0) {
+                std::cerr << "Handshake gone wrong" << std::endl;
+            }
             std::string file_name;
             file_name.clear();
             file_name = get_name(clientSocket);
@@ -234,7 +239,7 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
 
             std::cout << "Client wants to send file: " << file_name << std::endl;
             
-            ssize_t bytes_sent = send(clientSocket, "OK", 3, 0);
+            ssize_t bytes_sent = send(clientSocket, "OK ", 3, 0);
             if(bytes_sent < 0) {
                 std::cerr << "Handshake gone wrong" << std::endl;
             }
@@ -276,7 +281,7 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
                 fileLock.unlock();
                 is_queue_changing = false;
             }
-            if(strcmp(change,"DELETE") == 0) {
+            else if(strcmp(change,"DELETE") == 0) {
                 std::cout << "Client wants to delete file" << std::endl;
                 char file_del[CHUNK_SIZE];
                 bzero(file_del, CHUNK_SIZE);
@@ -292,6 +297,7 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
                 std::string file_name = file_del;
                 file_name = "./mp3files/" + file_name;
                 fileLock.lock();
+                std::cout << "File to delete: " << file_name << std::endl;
                 std::vector<std::string>::iterator position = std::find(fileQueue.begin(), fileQueue.end(), file_name);
                 if (position != fileQueue.end()){
                     if(*position == streamedFile){
@@ -299,10 +305,13 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
                     }
                     fileQueue.erase(position);
                 }
+                else{
+                    std::cerr << "File not found in queue" << std::endl;
+                }
                 fileLock.unlock();
                 is_queue_changing = false;
             }
-            if(strcmp(change,"SWAP") == 0) {
+            else if(strcmp(change,"SWAP") == 0) {
                 std::cout << "Client wants to swap files" << std::endl;
                 char idx_swap[CHUNK_SIZE];
                 bzero(idx_swap, CHUNK_SIZE);
@@ -328,8 +337,13 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
                     std::cout << "Files swapped successfully!" << std::endl;
                 } else {
                     std::cerr << "Invalid indices for swap!" << std::endl;
+                    is_queue_changing= false;
                 }
+                is_queue_changing = false;
                 fileQueueMutex.unlock();
+            }
+            else{
+                std::cerr << "Invalid command" << std::endl;
                 is_queue_changing = false;
             }
         }

@@ -222,6 +222,7 @@ if __name__ == '__main__':
                     continue
                 queue_change = input("Enter queue action('SWAP'/'DELETE'/'SKIP'): ")
                 if(queue_change == 'SWAP'):
+                    print('swapping')
                     client_socket.send(queue_change.encode('utf-8'))
                     handshakesw = client_socket.recv(MESSAGE_SIZE)
                     swapIndex1 = input("Enter first track index: ")
@@ -239,6 +240,8 @@ if __name__ == '__main__':
                     
                 elif(queue_change == 'SKIP'):
                     client_socket.send(queue_change.encode('utf-8'))
+                else:
+                    print("Invalid queue action")
 
                 
 

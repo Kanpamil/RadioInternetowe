@@ -188,8 +188,9 @@ def update_getter(client_queue_socket):
 
 def handle_queue_change(client_socket):
     global file_queue
-
+    print(action)
     def perform_swap():
+        global action
         swap_index1 = simpledialog.askinteger("Swap", "Enter first track index:")
         swap_index2 = simpledialog.askinteger("Swap", "Enter second track index:")
 
@@ -199,9 +200,11 @@ def handle_queue_change(client_socket):
             indexes = f"{swap_index1} {swap_index2}"
             client_socket.send(indexes.encode('utf-8'))
             messagebox.showinfo("Success", "Tracks swapped successfully!")
+        action = None
         close_queue_change_buttons()
 
     def perform_delete():
+        global action
         file_index = simpledialog.askinteger("Delete", "Enter track index:")
 
         if file_index is not None and 0 <= file_index < len(file_queue):
@@ -209,17 +212,23 @@ def handle_queue_change(client_socket):
             client_socket.recv(MESSAGE_SIZE)  # Handshake
             client_socket.send(file_queue[file_index].encode('utf-8'))
             messagebox.showinfo("Success", f"Track {file_queue[file_index]} deleted successfully!")
+        action = None
         close_queue_change_buttons()
 
     def perform_skip():
+        global action
         client_socket.send("SKIP".encode('utf-8'))
         messagebox.showinfo("Success", "Track skipped!")
         close_queue_change_buttons()
+        action = None
 
     def close_queue_change_buttons():
+        global action 
+        client_socket.send("NEVERMIND".encode('utf-8'))
         for widget in queue_change_frame.winfo_children():
             widget.destroy()
         queue_change_frame.pack_forget()
+        action = None
 
     # Request queue change from the server
     client_socket.send("QUEUECHANGE".encode('utf-8'))
@@ -277,7 +286,8 @@ def handle_action(client_socket, client_streaming_socket, client_queue_socket):
 
         elif action == 'QUEUECHANGE':
             handle_queue_change(client_socket)
-            action = None
+            while(action == 'QUEUECHANGE'):
+                threading.Event().wait(0.5)
 
         elif action == "QUEUE":
             messagebox.showinfo("Queue", "\n".join(file_queue))
