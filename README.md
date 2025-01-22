@@ -2,10 +2,11 @@
 Projekt na przedmot Sieci komputerowe 2
 
 
-to do
-operations on queue - swap and skip
-after skip send info about streaming through queuesocket
-interface client
+## to do
+ - cleanup code ( object if possible, if not just do comments, and put the functions in some order)
+ - write raport
+
+
 
 ## How to run
 1. type make in the terminal to compile project
@@ -14,11 +15,14 @@ interface client
    
 ### Some libraries if code doesnt work
 - sudo apt-get install ffmpeg
-- sudo apt install libtag1-dev
 - sudo apt-get install libmodplug1
-- pip install pydub 
 - sudo apt-get install libasound2-dev
+- pip install pydub 
 - pip install simpleaudio
+- pip install tk or sudo apt install python3-tk
+
+### Checking ports
+ - sudo netstat -tulnp | grep :110*
 
 #### mutexes to do in server
 - skip
