@@ -6,8 +6,8 @@
 
 
 ## to do
- - cleanup code ( object if possible, if not just do comments, and put the functions in some order)
  - write raport
+ - (optional) - change streaming request to streaming_socket instead of control_socket
 
 
 
