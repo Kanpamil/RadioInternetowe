@@ -94,7 +94,7 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
         ssize_t bytes_received = recv(clientSocket, buffer, CHUNK_SIZE, 0);
         if(bytes_received < 0) {
             std::cerr << "Error receiving data from client." << std::endl;
-            return;
+            break;
         }
         if(bytes_received == 0) {
             break;
@@ -124,13 +124,13 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
             //getting file name
             std::string file_name;
             file_name.clear();
-            char buffer[CHUNK_SIZE];
-            bzero(buffer, CHUNK_SIZE);
-            ssize_t bytes_received = recv(clientSocket, buffer, CHUNK_SIZE, 0);
+            char bufferfn[CHUNK_SIZE];
+            bzero(bufferfn, CHUNK_SIZE);
+            ssize_t bytes_received = recv(clientSocket, bufferfn, CHUNK_SIZE, 0);
             if(bytes_received < 0) {
                 std::cerr << "Error receiving file name from client." << std::endl;
             }
-            file_name = std::string(buffer);
+            file_name = std::string(bufferfn);
             if(file_name.empty() || file_name == "invalid") {
                 std::cerr << "Invalid file name received." << std::endl;
                 continue;
@@ -207,7 +207,7 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
                 std::cout << "Client wants to delete file: " << file_del << std::endl;
                 std::string file_name = file_del;
                 file_name = "./mp3files/" + file_name;
-                fileLock.lock();
+                fileQueueMutex.lock();                
                 std::cout << "File to delete: " << file_name << std::endl;
                 std::vector<std::string>::iterator position = std::find(fileQueue.begin(), fileQueue.end(), file_name);
                 if (position != fileQueue.end()){
@@ -219,7 +219,7 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
                 else{
                     std::cerr << "File not found in queue" << std::endl;
                 }
-                fileLock.unlock();
+                fileQueueMutex.unlock();
                 is_queue_changing = false;
             }
             //swap files in queue
@@ -254,8 +254,9 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
                 } else {
                     std::cerr << "Invalid indices for swap!" << std::endl;
                 }
-                is_queue_changing = false;
                 fileQueueMutex.unlock();
+                is_queue_changing = false;
+                
             }
             else{
                 std::cerr << "Invalid command" << std::endl;
@@ -490,7 +491,7 @@ void sendMP3FileToClient(int clientStreamingSocket, const std::string& filename)
     }
     //get filesize
     file.seekg(0, std::ios::end);  
-    std::streamsize fileSize = 0;
+    size_t fileSize = 0;
     fileSize = file.tellg();  
     file.seekg(0, std::ios::beg);
     // Send the file size to the client
@@ -558,10 +559,14 @@ void get_file(int client_socket, std::string file_name) {
     std::string size_str(size_buffer, size_bytes);
     size_t file_size = std::stoul(size_str);
 
-    send(client_socket, "SIZE_OK", 7, 0);  // Acknowledge file size
-
+    ssize_t bytes_sent = send(client_socket, "SIZE_OK", 7, 0);  // Acknowledge file size
+    if(bytes_sent < 0) {
+        std::cerr << "Error sending file size acknowledgment" << std::endl;
+        return;
+    }
     size_t total_bytes_received = 0;
     char buffer[CHUNK_SIZE];
+    bzero(buffer, CHUNK_SIZE);
     std::string file_data;
     file_data.clear();
 
@@ -582,7 +587,9 @@ void get_file(int client_socket, std::string file_name) {
     }
     //save the file in dedicated directory
     file_name = "mp3files/" + file_name;
+    fileQueueMutex.lock();
     fileQueue.push_back(file_name);
+    fileQueueMutex.unlock();
     save_file(file_name, file_data.c_str(), file_data.size());
 }
 
