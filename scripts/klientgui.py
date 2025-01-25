@@ -167,11 +167,14 @@ def handle_queue_change(client_socket):
         swap_index2 = simpledialog.askinteger("Swap", "Enter second track index:")
 
         if swap_index1 is not None and swap_index2 is not None:
-            client_socket.send("SWAP".encode('utf-8'))
-            client_socket.recv(MESSAGE_SIZE)  # Handshake
-            indexes = f"{swap_index1} {swap_index2}"
-            client_socket.send(indexes.encode('utf-8'))
-            messagebox.showinfo("Success", "Tracks swapped successfully!")
+            if swap_index1 < len(file_queue) and swap_index2 <len(file_queue):
+                client_socket.send("SWAP".encode('utf-8'))
+                client_socket.recv(MESSAGE_SIZE)  # Handshake
+                indexes = f"{swap_index1} {swap_index2}"
+                client_socket.send(indexes.encode('utf-8'))
+                messagebox.showinfo("Success", "Tracks swapped successfully!")
+            else:
+                messagebox.showinfo("Failure", "Index out of range!")
         close_queue_change_buttons()
 
     def perform_delete():
