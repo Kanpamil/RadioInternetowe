@@ -21,7 +21,7 @@
 - sudo apt-get install libmodplug1
 - sudo apt-get install libasound2-dev
 - sudo apt-get install pkg-config
-- sudo apt-get install libavformat-dev libavcodec-dev libavutil-dev
+- sudo apt-get install libavformat-dev libavcodec-dev libavutil-dev libswscale-dev libswresample-dev
 - pip install pydub 
 - pip install simpleaudio
 - pip install tk or sudo apt install python3-tk
