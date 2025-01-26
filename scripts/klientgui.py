@@ -92,7 +92,7 @@ def stream_song(client_socket, client_streaming_socket):
     while(working == True):
         #if client wants to stream and song is not playing
         if streaming == True and playing == False:
-            client_socket.send('STREAM'.encode('utf-8'))
+            client_streaming_socket.send('STREAM'.encode('utf-8'))
             audio_Segment = receiveMP3File(client_streaming_socket)
             tracktime = client_streaming_socket.recv(MESSAGE_SIZE)
             client_streaming_socket.send('OK'.encode('utf-8'))

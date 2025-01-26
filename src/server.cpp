@@ -62,40 +62,50 @@ void sendMP3FileToClient(int clientStreamingSocket, const std::string& filename)
 void streamingClientHandler(int clientStreamingSocket){
     char message[CHUNK_SIZE];
     bzero(message, CHUNK_SIZE);
-    std::cout<<"Streaming client connected."<<std::endl;
-    fileLock.lock();
-    sendMP3FileToClient(clientStreamingSocket, streamedFile);
-    fileLock.unlock();
+    while(running){ 
+        ssize_t bytes_received = recv(clientStreamingSocket, message, 256, 0);
+        if(bytes_received < 0) {
+            std::cerr << "Error receiving handshake" << std::endl;
+            break;
+        }
+        if(strcmp(message, "STREAM") == 0) {
+            std::cout<<"Streaming client connected."<<std::endl;
+            fileLock.lock();
+            sendMP3FileToClient(clientStreamingSocket, streamedFile);
+            fileLock.unlock();
+            bzero(message, CHUNK_SIZE);
+            ssize_t bytes_received = recv(clientStreamingSocket, message, 256, 0);
+            if(bytes_received < 0) {
+                std::cerr << "Error receiving handshake" << std::endl;
+            }
+            std::cout << "Received: " << message << std::endl;
+
+            momentLock.lock();
+            std::string trackM = std::to_string(trackMoment);
+            std::time_t currentTime = std::time(nullptr);
+            momentLock.unlock();
+
+            std::string timeString = std::to_string(currentTime);
+
+            ssize_t bytes_sent = send(clientStreamingSocket, trackM.c_str(), trackM.length(), 0);
+            if(bytes_sent < 0) {
+                std::cerr << "Error sending track moment" << std::endl;
+            }
+            std::cout << "Track moment sent: " << bytes_sent << std::endl;
+            bytes_received = 0;
+            bytes_received = recv(clientStreamingSocket, message, 256, 0);
+            if(bytes_received < 0) {
+                std::cerr << "Error receiving handshake" << std::endl;
+            }
+            std::cout << "Received: " << message << std::endl;
+            bytes_sent = 0;
+            bytes_sent = send(clientStreamingSocket, timeString.c_str(), timeString.length(), 0);
+            if(bytes_sent < 0) {
+                std::cerr << "Error sending moment of probing track" << std::endl;
+            }
+        }
+    }
     
-    ssize_t bytes_received = recv(clientStreamingSocket, message, 256, 0);
-    if(bytes_received < 0) {
-        std::cerr << "Error receiving handshake" << std::endl;
-    }
-    std::cout << "Received: " << message << std::endl;
-
-    momentLock.lock();
-    std::string trackM = std::to_string(trackMoment);
-    std::time_t currentTime = std::time(nullptr);
-    momentLock.unlock();
-
-    std::string timeString = std::to_string(currentTime);
-
-    ssize_t bytes_sent = send(clientStreamingSocket, trackM.c_str(), trackM.length(), 0);
-    if(bytes_sent < 0) {
-        std::cerr << "Error sending track moment" << std::endl;
-    }
-    std::cout << "Track moment sent: " << bytes_sent << std::endl;
-    bytes_received = 0;
-    bytes_received = recv(clientStreamingSocket, message, 256, 0);
-    if(bytes_received < 0) {
-        std::cerr << "Error receiving handshake" << std::endl;
-    }
-    std::cout << "Received: " << message << std::endl;
-    bytes_sent = 0;
-    bytes_sent = send(clientStreamingSocket, timeString.c_str(), timeString.length(), 0);
-    if(bytes_sent < 0) {
-        std::cerr << "Error sending moment of probing track" << std::endl;
-    }
     
 
 }
@@ -164,13 +174,6 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
             std::cout << "Handshake sent" << std::endl;
             //getting file from client
             get_file(clientSocket,file_name);
-        }
-        //Streaming from server to client
-        if(strcmp(buffer, "STREAM") == 0) {
-            std::cout << "Client wants to stream" << std::endl;
-            //create thread for streaming
-            std::thread(streamingClientHandler, clientStreamSocket).detach();
-            
         }
         //Queue handling
         if(strcmp(buffer, "QUEUECHANGE") == 0) {
@@ -470,6 +473,7 @@ int main() {
         // Handle the client in a separate thread
         std::thread(handleClient, clientSocket, clientStreamSocket,clientQueueSocket).detach();
         std::thread(update_sender, clientQueueSocket).detach();
+        std::thread(streamingClientHandler, clientStreamSocket).detach();
     }
 
     std::cout << "Server shutting down..." << std::endl;
