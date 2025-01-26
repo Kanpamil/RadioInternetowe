@@ -95,13 +95,19 @@ def stream_song(client_socket, client_streaming_socket):
             client_socket.send('STREAM'.encode('utf-8'))
             audio_Segment = receiveMP3File(client_streaming_socket)
             tracktime = client_streaming_socket.recv(MESSAGE_SIZE)
+            client_streaming_socket.send('OK'.encode('utf-8'))
+            anchorTime = client_streaming_socket.recv(MESSAGE_SIZE)
             tracktime = int(tracktime.decode('utf-8'))
+            anchorTime = int(anchorTime.decode('utf-8'))
+            offset = time.time() - anchorTime 
+            tracktime += offset
             print(f"Start from {tracktime} seconds")
             stop_playing.clear()
             playing_thread = threading.Thread(target=play_file, args=(audio_Segment.export(format='mp3'), tracktime))
             playing_thread.start()
             playing = True
             del tracktime
+            del offset
             del audio_Segment
         #if client wants to stop streaming and song is playing
         elif streaming == False and playing == True:

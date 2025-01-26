@@ -29,11 +29,11 @@ extern "C" {
 #define CHUNK_SIZE 4096
 #define LUI long unsigned int
 
-std::vector<int> streamingSockets;
 std::mutex fileQueueMutex;
 std::mutex momentLock;
 std::mutex fileLock;
 std::mutex clientMutex;
+
 std::vector<std::string> fileQueue;
 std::string streamedFile;
 int trackMoment = 0;
@@ -42,6 +42,7 @@ std::atomic<int> clientsAcknowledged = 0;
 int serverControlSocket = -1;
 int serverStreamSocket = -1;
 int serverQueueSocket = -1;
+
 bool running = true; // Flag to stop the server loop
 bool skip = false; // Flag to skip the current track
 bool is_queue_changing = false; // Flag to check if the queue is being changed by a client
@@ -65,19 +66,37 @@ void streamingClientHandler(int clientStreamingSocket){
     fileLock.lock();
     sendMP3FileToClient(clientStreamingSocket, streamedFile);
     fileLock.unlock();
-    momentLock.lock();
-    std::string trackM = std::to_string(trackMoment);
-    momentLock.unlock();
+    
     ssize_t bytes_received = recv(clientStreamingSocket, message, 256, 0);
     if(bytes_received < 0) {
         std::cerr << "Error receiving handshake" << std::endl;
     }
     std::cout << "Received: " << message << std::endl;
+
+    momentLock.lock();
+    std::string trackM = std::to_string(trackMoment);
+    std::time_t currentTime = std::time(nullptr);
+    momentLock.unlock();
+
+    std::string timeString = std::to_string(currentTime);
+
     ssize_t bytes_sent = send(clientStreamingSocket, trackM.c_str(), trackM.length(), 0);
     if(bytes_sent < 0) {
         std::cerr << "Error sending track moment" << std::endl;
     }
     std::cout << "Track moment sent: " << bytes_sent << std::endl;
+    bytes_received = 0;
+    bytes_received = recv(clientStreamingSocket, message, 256, 0);
+    if(bytes_received < 0) {
+        std::cerr << "Error receiving handshake" << std::endl;
+    }
+    std::cout << "Received: " << message << std::endl;
+    bytes_sent = 0;
+    bytes_sent = send(clientStreamingSocket, timeString.c_str(), timeString.length(), 0);
+    if(bytes_sent < 0) {
+        std::cerr << "Error sending moment of probing track" << std::endl;
+    }
+    
 
 }
 
@@ -275,6 +294,7 @@ void handleClient(int clientSocket, int clientStreamSocket, int clientQueueSocke
     clientMutex.unlock();
 }
 void update_sender(int clientQueueSocket){
+    bool alreadyAcknowledged = false;
     while(running){
         //if the clients have to receive skip message
         if(clientSkip){
@@ -284,8 +304,11 @@ void update_sender(int clientQueueSocket){
                 break;
             }
             else{
-                std::cout << "Skip message sent." << std::endl;
-                clientsAcknowledged++;
+                if(alreadyAcknowledged == false){
+                    clientsAcknowledged++;
+                    std::cout << "Skip message sent." << std::endl;
+                }
+                
             }
 
             clientMutex.lock();
@@ -297,8 +320,10 @@ void update_sender(int clientQueueSocket){
 
             sleep(2);
         }
+        
         //otherwise send queue continously
         else{
+            alreadyAcknowledged = false;
             std::string queue = "";
             fileQueueMutex.lock();
             for(LUI i = 0; i < fileQueue.size(); i++) {
@@ -418,16 +443,19 @@ int main() {
             std::cerr << "Failed to accept client." << std::endl;
             continue;
         }
+
         int clientStreamSocket = accept(serverStreamSocket, (struct sockaddr*)&clientStrAddr, &clientStrAddrLen);
         if (clientStreamSocket < 0) {
             std::cerr << "Failed to accept client on streaming socket." << std::endl;
             continue;
-        } 
+        }
+
         int clientQueueSocket = accept(serverQueueSocket, (struct sockaddr*)&clientQueueAddr, &clientQueueAddrLen);
         if (clientQueueSocket < 0) {
             std::cerr << "Failed to accept client on queue socket." << std::endl;
             continue;
         }
+
         clientMutex.lock();
         numberOfClients++;
         std::cout << "Number of clients: " << numberOfClients << std::endl;
@@ -455,10 +483,6 @@ void signalHandler(int signal) {
     if (signal == SIGINT) {
         std::cout << "\nCaught SIGINT (Ctrl+C), shutting down...\n";
         
-        // Close all client sockets
-        for (int clientSocket : streamingSockets) {
-            close(clientSocket);
-        }
         // Close the server socket if it's open
         if (serverControlSocket != -1) {
             close(serverControlSocket);
