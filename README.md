@@ -4,13 +4,6 @@
 - Kamil Kaczmarek 155971
 - Jakub Butkiewicz 155833
 
-
-## to do
- - write raport
- - (optional) - change streaming request to streaming_socket instead of control_socket
-
-
-
 ## How to run
 1. type make in the terminal to compile project
 2. Run server using: ./bin/server.out
