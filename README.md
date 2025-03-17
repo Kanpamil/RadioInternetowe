@@ -1,5 +1,5 @@
 # RadioInternetowe
-#### Projekt na przedmot Sieci komputerowe 2
+#### Projekt na przedmiot Sieci komputerowe 2
 #### semestr 5 grupa L5
 - Kamil Kaczmarek 155971
 - Jakub Butkiewicz 155833
